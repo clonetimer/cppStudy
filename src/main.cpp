@@ -1,55 +1,90 @@
 #include <iostream>
-#include <string>
-#include <limits>
+#include <vector>
+#include <array>
 
-
-void printMessage(const std::string& message)
-{
-    std::cout << message << std::endl;
-}
 int main()
 {
-    std::string name = "Alice";
+    std::vector<int> numbers{10, 20, 30};
 
-    std::cout << name << std::endl;
-    std::cout << name.size() << std::endl;
+    numbers.push_back(40);
+    numbers.push_back(50);
 
-    std::string first = "Hello";
-    std::string second = "World";
+    std::cout << numbers.size() << std::endl;
 
-    std::string result = first + " " + second;
-    std::cout << result << '\n';
+    for (int value : numbers)
+    {
+        std::cout << value << std::endl;
+    }
 
-    if(~result.empty()) std::cout << "result not empty" << std::endl;
-    std::cout << result[0] << '\n'; 
+    std::cout << "front():" << numbers.front() << '\n'; // 10
+    std::cout << "back():" << numbers.back() << '\n';  // 30  
+    numbers.pop_back();
+    std::cout << "after pop_back() size:" << numbers.size() << '\n';
+    try {
+        std::cout << numbers.at(10) << '\n';
+    }
+    catch (const std::out_of_range& e) {
+        std::cerr << "下标越界: " << e.what() << '\n';
+    }
+    catch (const std::exception& e) {
+        std::cerr << "标准异常: " << e.what() << '\n';
+    }
+    std::cout << "capacity():" << numbers.capacity() << '\n';
 
-    if (result == "Hello World") std::cout << "result is 'Hello World' " << '\n';
+    std::array<double, 3> position{1.0, 2.0, 3.0};
+    std::cout << position[0] << '\n';
+    std::cout << position.size() << '\n';
 
-    for (char c : result) std::cout << c << std::endl;
-    for (char& c : result) if (c=='l') c='L';
-    std::cout << "result:" << result << '\n';
-    std::cout << "W is at:" << result.find("W") << '\n';
-    if (result.find("world") == std::string::npos) std::cout << "Can't find world" << '\n';
-    std::cout << result.substr(6,5) << '\n';
-    std::cout << result.erase(5,6) << '\n';
-    std::cout << result.insert(5," insert") << '\n';
+    for (double value : position)
+    {
+        std::cout << value << '\n';
+    }
 
-    std::string text;
-    std::cout << "input two word with blank:";
-    std::cin >> text;
-    std::cout << "input is " << text << '\n';
+    // 返回一个迭代器，指向第一个元素
+    auto it = numbers.begin();
+    std::cout << "numbers.begin():" << *it << '\n';
 
-    std::cin.ignore(
-        std::numeric_limits<std::streamsize>::max(),
-        '\n'
-    );
+    for (
+        auto it = numbers.begin();
+        it != numbers.end();
+        ++it
+    )
+    {
+        std::cout << *it << '\n';
+    }
+    // 当 vector 被 push_back、insert、erase 等修改时，不要想当然地继续使用之前保存的迭代器、指针或引用。
 
-    std::cout << "input two word with blank again:";
-    std::getline(std::cin, text);
-    std::cout << "input is " << text << '\n';
 
-    printMessage(text);
-    printMessage("hello");
-    
+    std::vector<double> scores{};
+    double score = 0.0;
+    std::cout << "Enter scores (-1 to finish):" << '\n';
+    while(1){
+        std::cin >> score;
+        if (score != -1) scores.push_back(score);
+        else break;
+    }
+    double sum = 0.0;
+    for (double score : scores)
+    {
+        sum += score;
+    }
+    std::cout << "Cout:" << scores.size() << '\n';
+    std::cout << "Scores:\n";
+
+    for (double score : scores)
+    {
+        std::cout << score << '\n';
+    }
+
+    if (!scores.empty())
+    {
+        double average =
+            sum / static_cast<double>(scores.size());
+
+        std::cout << "Average: "
+                  << average
+                  << '\n';
+    }
+
     return 0;
 }
