@@ -1,90 +1,84 @@
 #include <iostream>
-#include <vector>
-#include <array>
+#include <map>
+#include <string>
+#include <unordered_map>
+#include <set>
 
-int main()
-{
-    std::vector<int> numbers{10, 20, 30};
 
-    numbers.push_back(40);
-    numbers.push_back(50);
+int main(){
+    // key, value
+    std::map<std::string, int> scores;
+    scores["Alice"] = 90;
+    scores["Bob"] = 85;
+    scores["Carol"] = 95;
 
-    std::cout << numbers.size() << std::endl;
+    std::cout << scores["Alice"] << '\n';
 
-    for (int value : numbers)
+    //遍历
+    for (const auto& item:scores)
     {
-        std::cout << value << std::endl;
-    }
-
-    std::cout << "front():" << numbers.front() << '\n'; // 10
-    std::cout << "back():" << numbers.back() << '\n';  // 30  
-    numbers.pop_back();
-    std::cout << "after pop_back() size:" << numbers.size() << '\n';
-    try {
-        std::cout << numbers.at(10) << '\n';
-    }
-    catch (const std::out_of_range& e) {
-        std::cerr << "下标越界: " << e.what() << '\n';
-    }
-    catch (const std::exception& e) {
-        std::cerr << "标准异常: " << e.what() << '\n';
-    }
-    std::cout << "capacity():" << numbers.capacity() << '\n';
-
-    std::array<double, 3> position{1.0, 2.0, 3.0};
-    std::cout << position[0] << '\n';
-    std::cout << position.size() << '\n';
-
-    for (double value : position)
-    {
-        std::cout << value << '\n';
-    }
-
-    // 返回一个迭代器，指向第一个元素
-    auto it = numbers.begin();
-    std::cout << "numbers.begin():" << *it << '\n';
-
-    for (
-        auto it = numbers.begin();
-        it != numbers.end();
-        ++it
-    )
-    {
-        std::cout << *it << '\n';
-    }
-    // 当 vector 被 push_back、insert、erase 等修改时，不要想当然地继续使用之前保存的迭代器、指针或引用。
-
-
-    std::vector<double> scores{};
-    double score = 0.0;
-    std::cout << "Enter scores (-1 to finish):" << '\n';
-    while(1){
-        std::cin >> score;
-        if (score != -1) scores.push_back(score);
-        else break;
-    }
-    double sum = 0.0;
-    for (double score : scores)
-    {
-        sum += score;
-    }
-    std::cout << "Cout:" << scores.size() << '\n';
-    std::cout << "Scores:\n";
-
-    for (double score : scores)
-    {
-        std::cout << score << '\n';
-    }
-
-    if (!scores.empty())
-    {
-        double average =
-            sum / static_cast<double>(scores.size());
-
-        std::cout << "Average: "
-                  << average
+        std::cout << item.first
+                  << ": "
+                  << item.second
                   << '\n';
     }
+    // 未定义的key，value取默认值`0`
+    std::cout << "David: " << scores["David"] << '\n';
+
+    if (scores.find("Bob") != scores.end()) std::cout << "Bob exist" << '\n';
+    // C++20支持contain
+    if (scores.contains("Alice")) std::cout << "Alice exist" << '\n';
+
+    //insert
+    scores["Timer1"] = 100;
+    scores.insert({"Timer2", 95});
+    scores.emplace("Timer3", 95);
+    for (const auto& [name, score] : scores)
+    {
+        std::cout << name
+                  << ": "
+                  << score
+                  << '\n';
+    }
+    // modify
+    scores["Timer3"] = 100;
+    std::cout << "Timer3: " << scores["Timer3"] << std::endl;
+    // delete
+    scores.erase("Bob");
+    if(scores.find("Bob") == scores.end()) std::cout << "Bob not found" << '\n';
+    // clear
+    scores.clear();
+    if (scores.empty()) std::cout << "Empty Map" << '\n';
+
+    //不保证顺序的键值表
+    std::unordered_map<std::string, int> ages;
+    ages["Alice"] = 20;
+    ages["Bob"] = 21;
+    ages["Carol"] = 22;
+
+    for (const auto& age : ages)
+    {
+        std::cout << age.first
+                  << ": "
+                  << age.second
+                  << '\n';
+    }
+
+    // 集合:去重+排序
+    std::set<std::string> names{"Bob","Alice"};
+
+    names.insert("Bob");
+    names.insert("Alice");
+    for (const auto& name : names)
+    {
+        std::cout << name << '\n';
+    }
+
+    if(names.find("Alice") != names.end()) std::cout << "Alice exist in set" << '\n';
+    if(names.count("Bob")) std::cout << "Bob exist in set" << '\n';
+    if(!names.contains("Carol")) std::cout << "Carol not found" << '\n';
+
+    
 
     return 0;
 }
