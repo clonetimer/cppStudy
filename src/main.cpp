@@ -1,57 +1,55 @@
-#include "calculator.h"
-
 #include <iostream>
-#include <stdexcept>
+#include <string>
+#include <limits>
 
+
+void printMessage(const std::string& message)
+{
+    std::cout << message << std::endl;
+}
 int main()
 {
-    double first = 0.0;
-    double second = 0.0;
-    char operation = '\0';
+    std::string name = "Alice";
 
-    std::cout << "Enter first number: ";
-    std::cin >> first;
+    std::cout << name << std::endl;
+    std::cout << name.size() << std::endl;
 
-    std::cout << "Enter operator (+ - * /): ";
-    std::cin >> operation;
+    std::string first = "Hello";
+    std::string second = "World";
 
-    std::cout << "Enter second number: ";
-    std::cin >> second;
+    std::string result = first + " " + second;
+    std::cout << result << '\n';
 
-    try
-    {
-        double result = 0.0;
+    if(~result.empty()) std::cout << "result not empty" << std::endl;
+    std::cout << result[0] << '\n'; 
 
-        switch (operation)
-        {
-        case '+':
-            result = add(first, second);
-            break;
+    if (result == "Hello World") std::cout << "result is 'Hello World' " << '\n';
 
-        case '-':
-            result = subtract(first, second);
-            break;
+    for (char c : result) std::cout << c << std::endl;
+    for (char& c : result) if (c=='l') c='L';
+    std::cout << "result:" << result << '\n';
+    std::cout << "W is at:" << result.find("W") << '\n';
+    if (result.find("world") == std::string::npos) std::cout << "Can't find world" << '\n';
+    std::cout << result.substr(6,5) << '\n';
+    std::cout << result.erase(5,6) << '\n';
+    std::cout << result.insert(5," insert") << '\n';
 
-        case '*':
-            result = multiply(first, second);
-            break;
+    std::string text;
+    std::cout << "input two word with blank:";
+    std::cin >> text;
+    std::cout << "input is " << text << '\n';
 
-        case '/':
-            result = divide(first, second);
-            break;
+    std::cin.ignore(
+        std::numeric_limits<std::streamsize>::max(),
+        '\n'
+    );
 
-        default:
-            std::cerr << "Error: unsupported operator." << std::endl;
-            return 1;
-        }
+    std::cout << "input two word with blank again:";
+    std::getline(std::cin, text);
+    std::cout << "input is " << text << '\n';
 
-        std::cout << "Result: " << result << std::endl;
-    }
-    catch (const std::invalid_argument& error)
-    {
-        std::cerr << "Error: " << error.what() << std::endl;
-        return 1;
-    }
-
+    printMessage(text);
+    printMessage("hello");
+    
     return 0;
 }
