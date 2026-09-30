@@ -1,92 +1,222 @@
-#include <algorithm>
-#include <fstream>
+#include "todo.h"
+
 #include <iostream>
-#include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
-struct Student
+namespace
 {
-    std::string name;
-    int score;
-};
 
-int main()
+const std::string TASK_FILE = "tasks.txt";
+
+void printUsage()
 {
-    std::ifstream input("scores.txt");
+    std::cout
+        << "Usage:\n"
+        << "  todo add <task>\n"
+        << "  todo list\n"
+        << "  todo done <number>\n"
+        << "  todo remove <number>\n";
+}
 
-    if (!input)
+std::string joinArguments(
+    int argc,
+    char* argv[],
+    int startIndex
+)
+{
+    std::string result;
+
+    for (int i = startIndex; i < argc; ++i)
     {
-        std::cerr
-            << "Error: failed to open scores.txt\n";
-        return 1;
+        if (!result.empty())
+        {
+            result += ' ';
+        }
+
+        result += argv[i];
     }
 
-    std::vector<Student> students;
+    return result;
+}
 
-    std::string line;
-    int lineNumber = 0;
+std::size_t parseTaskNumber(
+    const std::string& text
+)
+{
+    std::size_t position = 0;
 
-    while (std::getline(input, line))
-    {
-        ++lineNumber;
-
-        if (line.empty())
-        {
-            continue;
-        }
-
-        std::istringstream parser(line);
-
-        Student student;
-
-        if (!(parser >> student.name >> student.score))
-        {
-            std::cerr
-                << "Error: invalid format at line "
-                << lineNumber
-                << ": "
-                << line
-                << '\n';
-
-            return 1;
-        }
-
-        students.push_back(student);
-    }
-
-    std::sort(
-        students.begin(),
-        students.end(),
-        [](const Student& a, const Student& b)
-        {
-            return a.score > b.score;
-        }
+    int value = std::stoi(
+        text,
+        &position
     );
 
-    std::ofstream output("results.txt");
-
-    if (!output)
+    if (position != text.size() ||
+        value <= 0)
     {
-        std::cerr
-            << "Error: failed to create results.txt\n";
+        throw std::invalid_argument(
+            "Invalid task number."
+        );
+    }
+
+    return static_cast<std::size_t>(value);
+}
+
+}
+
+int main(int argc, char* argv[])
+{
+    if (argc < 2)
+    {
+        printUsage();
         return 1;
     }
 
-    for (const auto& student : students)
+    const std::string command = argv[1];
+
+    try
     {
-        std::cout
-            << student.name
-            << ' '
-            << student.score
-            << '\n';
+        std::vector<Task> tasks =
+            loadTasks(TASK_FILE);
 
-        output
-            << student.name
-            << ' '
-            << student.score
-            << '\n';
+        if (command == "list")
+        {
+            if (argc != 2)
+            {
+                std::cerr
+                    << "Error: list takes no arguments.\n";
+                return 1;
+            }
+
+            listTasks(tasks);
+            return 0;
+        }
+
+        if (command == "add")
+        {
+            if (argc < 3)
+            {
+                std::cerr
+                    << "Error: task text is required.\n";
+                return 1;
+            }
+
+            std::string text =
+                joinArguments(
+                    argc,
+                    argv,
+                    2
+                );
+
+            tasks.push_back({
+                text,
+                false
+            });
+
+            saveTasks(
+                TASK_FILE,
+                tasks
+            );
+
+            std::cout
+                << "Added: "
+                << text
+                << '\n';
+
+            return 0;
+        }
+
+        if (command == "done")
+        {
+            if (argc != 3)
+            {
+                std::cerr
+                    << "Error: task number is required.\n";
+                return 1;
+            }
+
+            std::size_t taskNumber =
+                parseTaskNumber(argv[2]);
+
+            if (!markTaskDone(
+                    tasks,
+                    taskNumber))
+            {
+                std::cerr
+                    << "Error: task "
+                    << taskNumber
+                    << " does not exist.\n";
+
+                return 1;
+            }
+
+            saveTasks(
+                TASK_FILE,
+                tasks
+            );
+
+            std::cout
+                << "Completed task "
+                << taskNumber
+                << ".\n";
+
+            return 0;
+        }
+
+        if (command == "remove")
+        {
+            if (argc != 3)
+            {
+                std::cerr
+                    << "Error: task number is required.\n";
+                return 1;
+            }
+
+            std::size_t taskNumber =
+                parseTaskNumber(argv[2]);
+
+            if (!removeTask(
+                    tasks,
+                    taskNumber))
+            {
+                std::cerr
+                    << "Error: task "
+                    << taskNumber
+                    << " does not exist.\n";
+
+                return 1;
+            }
+
+            saveTasks(
+                TASK_FILE,
+                tasks
+            );
+
+            std::cout
+                << "Removed task "
+                << taskNumber
+                << ".\n";
+
+            return 0;
+        }
+
+        std::cerr
+            << "Error: unknown command '"
+            << command
+            << "'.\n";
+
+        printUsage();
+
+        return 1;
     }
+    catch (const std::exception& error)
+    {
+        std::cerr
+            << "Error: "
+            << error.what()
+            << '\n';
 
-    return 0;
+        return 1;
+    }
 }

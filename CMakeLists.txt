@@ -1,35 +1,35 @@
 cmake_minimum_required(VERSION 3.16)
 
 project(
-    Calculator
+    TodoCLI
     VERSION 1.0.0
     LANGUAGES CXX
 )
 
 add_library(
-    calculator_lib
-    src/calculator.cpp
+    todo_lib
+    src/todo.cpp
 )
 
 target_include_directories(
-    calculator_lib
+    todo_lib
     PUBLIC
     include
 )
 
 target_compile_features(
-    calculator_lib
+    todo_lib
     PUBLIC
     cxx_std_17
 )
 
 add_executable(
-    calculator
+    todo
     src/main.cpp
 )
 
 target_link_libraries(
-    calculator
+    todo
     PRIVATE
-    calculator_lib
+    todo_lib
 )
