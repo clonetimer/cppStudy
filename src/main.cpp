@@ -1,83 +1,132 @@
 #include <iostream>
-#include <map>
-#include <string>
-#include <unordered_map>
-#include <set>
+#include <vector>
+#include <algorithm>
 
+struct Student
+{
+    std::string name;
+    int score;
+};
 
 int main(){
-    // key, value
-    std::map<std::string, int> scores;
-    scores["Alice"] = 90;
-    scores["Bob"] = 85;
-    scores["Carol"] = 95;
-
-    std::cout << scores["Alice"] << '\n';
-
-    //遍历
-    for (const auto& item:scores)
+    std::vector<int> numbers{5, 2, 8, 1, 3};
+    for(const auto& number : numbers)
     {
-        std::cout << item.first
-                  << ": "
-                  << item.second
-                  << '\n';
+        std::cout << "Number: " << number << '\n'; 
     }
-    // 未定义的key，value取默认值`0`
-    std::cout << "David: " << scores["David"] << '\n';
-
-    if (scores.find("Bob") != scores.end()) std::cout << "Bob exist" << '\n';
-    // C++20支持contain
-    if (scores.contains("Alice")) std::cout << "Alice exist" << '\n';
-
-    //insert
-    scores["Timer1"] = 100;
-    scores.insert({"Timer2", 95});
-    scores.emplace("Timer3", 95);
-    for (const auto& [name, score] : scores)
+    std::cout << "-----\n";
+    std::sort(numbers.begin(), numbers.end());
+    for(const auto& number : numbers)
     {
-        std::cout << name
-                  << ": "
-                  << score
-                  << '\n';
+        std::cout << "Number: " << number << '\n'; 
+    }    
+    // lambda函数，采用严格弱序，使用相等符号会导致sort内部的快排分区逻辑越过数组边界读写
+    // []捕获外部变量
+    std::sort(
+        numbers.begin(), 
+        numbers.end(), 
+        [](int a, int b)
+        {
+            return a > b;
+        }    
+    );
+    std::cout << "-----\n";
+    for(const auto& number : numbers)
+    {
+        std::cout << "Number: " << number << '\n'; 
     }
-    // modify
-    scores["Timer3"] = 100;
-    std::cout << "Timer3: " << scores["Timer3"] << std::endl;
-    // delete
-    scores.erase("Bob");
-    if(scores.find("Bob") == scores.end()) std::cout << "Bob not found" << '\n';
-    // clear
-    scores.clear();
-    if (scores.empty()) std::cout << "Empty Map" << '\n';
-
-    //不保证顺序的键值表
-    std::unordered_map<std::string, int> ages;
-    ages["Alice"] = 20;
-    ages["Bob"] = 21;
-    ages["Carol"] = 22;
-
-    for (const auto& age : ages)
+    // -------
+    auto it = std::find_if(
+        numbers.begin(),
+        numbers.end(),
+        [](int value)
+        {
+            return value > 3;
+        }
+    );
+    if(it != numbers.end())
     {
-        std::cout << age.first
-                  << ": "
-                  << age.second
-                  << '\n';
+        std::cout << ">3 number exist\n"; 
+    }
+    else
+    {
+        std::cout << ">3 number not found\n";
     }
 
-    // 集合:去重+排序
-    std::set<std::string> names{"Bob","Alice"};
-
-    names.insert("Bob");
-    names.insert("Alice");
-    for (const auto& name : names)
+    int threshold = 5;
+    it = std::find_if(
+        numbers.begin(),
+        numbers.end(),
+        [threshold](int value)
+        {
+            return value > threshold;
+        }
+    );
+    if(it != numbers.end())
     {
-        std::cout << name << '\n';
+        std::cout << ">" << threshold << " number exist\n"; 
+    }
+    else
+    {
+        std::cout << ">" << threshold << " number not found\n";
+    }
+    // std::transform
+    std::vector<int> squared(numbers.size());
+    std::transform(
+        numbers.begin(),
+        numbers.end(),
+        squared.begin(),
+        [](int value)
+        {
+            return value * value;
+        }
+    );
+    for (const auto& item : squared)
+    {
+        std::cout << item << '\n';
     }
 
-    if(names.find("Alice") != names.end()) std::cout << "Alice exist in set" << '\n';
-    if(names.count("Bob")) std::cout << "Bob exist in set" << '\n';
-    if(!names.contains("Carol")) std::cout << "Carol not found" << '\n';
+    std::vector<Student> students{
+        {"Alice", 85},
+        {"Bob", 92},
+        {"Carol", 78},
+        {"David", 95}
+    };
 
+    std::sort(
+        students.begin(),
+        students.end(),
+        [](const Student& a, const Student& b)
+        {
+            return a.score > b.score;
+        }
+    );
+
+    for (const auto& student : students)
+    {
+        std::cout
+            << student.name
+            << ": "
+            << student.score
+            << '\n';
+    }
+
+    auto it2 = std::find_if(
+        students.begin(),
+        students.end(),
+        [](const Student& student)
+        {
+            return student.score < 80;
+        }
+    );
+
+    if (it2 != students.end())
+    {
+        std::cout
+            << "Found: "
+            << it2->name
+            << '\n';
+    }
     
 
     return 0;
