@@ -1,6 +1,9 @@
-#include <iostream>
-#include <vector>
 #include <algorithm>
+#include <fstream>
+#include <iostream>
+#include <sstream>
+#include <string>
+#include <vector>
 
 struct Student
 {
@@ -8,90 +11,49 @@ struct Student
     int score;
 };
 
-int main(){
-    std::vector<int> numbers{5, 2, 8, 1, 3};
-    for(const auto& number : numbers)
+int main()
+{
+    std::ifstream input("scores.txt");
+
+    if (!input)
     {
-        std::cout << "Number: " << number << '\n'; 
-    }
-    std::cout << "-----\n";
-    std::sort(numbers.begin(), numbers.end());
-    for(const auto& number : numbers)
-    {
-        std::cout << "Number: " << number << '\n'; 
-    }    
-    // lambda函数，采用严格弱序，使用相等符号会导致sort内部的快排分区逻辑越过数组边界读写
-    // []捕获外部变量
-    std::sort(
-        numbers.begin(), 
-        numbers.end(), 
-        [](int a, int b)
-        {
-            return a > b;
-        }    
-    );
-    std::cout << "-----\n";
-    for(const auto& number : numbers)
-    {
-        std::cout << "Number: " << number << '\n'; 
-    }
-    // -------
-    auto it = std::find_if(
-        numbers.begin(),
-        numbers.end(),
-        [](int value)
-        {
-            return value > 3;
-        }
-    );
-    if(it != numbers.end())
-    {
-        std::cout << ">3 number exist\n"; 
-    }
-    else
-    {
-        std::cout << ">3 number not found\n";
+        std::cerr
+            << "Error: failed to open scores.txt\n";
+        return 1;
     }
 
-    int threshold = 5;
-    it = std::find_if(
-        numbers.begin(),
-        numbers.end(),
-        [threshold](int value)
-        {
-            return value > threshold;
-        }
-    );
-    if(it != numbers.end())
-    {
-        std::cout << ">" << threshold << " number exist\n"; 
-    }
-    else
-    {
-        std::cout << ">" << threshold << " number not found\n";
-    }
-    // std::transform
-    std::vector<int> squared(numbers.size());
-    std::transform(
-        numbers.begin(),
-        numbers.end(),
-        squared.begin(),
-        [](int value)
-        {
-            return value * value;
-        }
-    );
-    for (const auto& item : squared)
-    {
-        std::cout << item << '\n';
-    }
+    std::vector<Student> students;
 
-    std::vector<Student> students{
-        {"Alice", 85},
-        {"Bob", 92},
-        {"Carol", 78},
-        {"David", 95}
-    };
+    std::string line;
+    int lineNumber = 0;
+
+    while (std::getline(input, line))
+    {
+        ++lineNumber;
+
+        if (line.empty())
+        {
+            continue;
+        }
+
+        std::istringstream parser(line);
+
+        Student student;
+
+        if (!(parser >> student.name >> student.score))
+        {
+            std::cerr
+                << "Error: invalid format at line "
+                << lineNumber
+                << ": "
+                << line
+                << '\n';
+
+            return 1;
+        }
+
+        students.push_back(student);
+    }
 
     std::sort(
         students.begin(),
@@ -102,32 +64,29 @@ int main(){
         }
     );
 
+    std::ofstream output("results.txt");
+
+    if (!output)
+    {
+        std::cerr
+            << "Error: failed to create results.txt\n";
+        return 1;
+    }
+
     for (const auto& student : students)
     {
         std::cout
             << student.name
-            << ": "
+            << ' '
+            << student.score
+            << '\n';
+
+        output
+            << student.name
+            << ' '
             << student.score
             << '\n';
     }
-
-    auto it2 = std::find_if(
-        students.begin(),
-        students.end(),
-        [](const Student& student)
-        {
-            return student.score < 80;
-        }
-    );
-
-    if (it2 != students.end())
-    {
-        std::cout
-            << "Found: "
-            << it2->name
-            << '\n';
-    }
-    
 
     return 0;
 }
