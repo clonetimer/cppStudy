@@ -1,20 +1,20 @@
 #include <iostream>
-#include <memory>
 #include <string>
+#include <utility>
 
-class Resource
+class Object
 {
 public:
-    Resource(std::string name)
+    Object(std::string name)
         : name_(std::move(name))
     {
         std::cout
-            << "Create: "
+            << "Construct: "
             << name_
             << '\n';
     }
 
-    ~Resource()
+    ~Object()
     {
         std::cout
             << "Destroy: "
@@ -22,79 +22,67 @@ public:
             << '\n';
     }
 
+    Object(const Object& other)
+        : name_(other.name_)
+    {
+        std::cout
+            << "Copy construct: "
+            << name_
+            << '\n';
+    }
+
+    Object& operator=(const Object& other)
+    {
+        std::cout
+            << "Copy assign\n";
+
+        name_ = other.name_;
+
+        return *this;
+    }
+
+    Object(Object&& other) noexcept
+        : name_(std::move(other.name_))
+    {
+        std::cout
+            << "Move construct: "
+            << name_
+            << '\n';
+    }
+
+    Object& operator=(Object&& other) noexcept
+    {
+        std::cout
+            << "Move assign\n";
+
+        name_ = std::move(other.name_);
+
+        return *this;
+    }
+
 private:
     std::string name_;
 };
 
-void uniqueDemo()
-{
-    auto first =
-        std::make_unique<Resource>("Unique");
-
-    auto second =
-        std::move(first);
-
-    if (!first)
-    {
-        std::cout << "first is empty\n";
-    }
-}
-
-void sharedDemo()
-{
-    auto first =
-        std::make_shared<Resource>("Shared");
-
-    std::cout
-        << first.use_count()
-        << '\n';
-
-    {
-        auto second = first;
-
-        std::cout
-            << first.use_count()
-            << '\n';
-    }
-
-    std::cout
-        << first.use_count()
-        << '\n';
-}
-
-void weakDemo()
-{
-    std::weak_ptr<Resource> weak;
-
-    {
-        auto shared =
-            std::make_shared<Resource>("Weak target");
-
-        weak = shared;
-
-        if (auto locked = weak.lock())
-        {
-            std::cout
-                << "Object is alive\n";
-        }
-    }
-
-    if (weak.expired())
-    {
-        std::cout
-            << "Object is gone\n";
-    }
-}
-
 int main()
 {
-    uniqueDemo();
+    Object a("A");
 
-    std::cout << "---\n";
+    std::cout << "--- copy construct ---\n";
 
-    sharedDemo();
+    Object b = a;
 
-    std::cout << "---\n";
+    std::cout << "--- copy assign ---\n";
 
-    weakDemo();
+    Object c("C");
+    c = a;
+
+    std::cout << "--- move construct ---\n";
+
+    Object d = std::move(a);
+
+    std::cout << "--- move assign ---\n";
+
+    Object e("E");
+    e = std::move(b);
 }
