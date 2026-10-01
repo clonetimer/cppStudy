@@ -2,87 +2,87 @@
 #include <string>
 #include <utility>
 
-class Object
+class Task
 {
 public:
-    Object(std::string name)
-        : name_(std::move(name))
+    Task(
+        std::string text,
+        int priority,
+        bool done = false
+    )
+        : text_(std::move(text)),
+          priority_(priority),
+          done_(done)
     {
-        std::cout
-            << "Construct: "
-            << name_
-            << '\n';
     }
 
-    ~Object()
+    bool operator==(const Task& other) const
     {
-        std::cout
-            << "Destroy: "
-            << name_
-            << '\n';
+        return text_ == other.text_
+            && priority_ == other.priority_
+            && done_ == other.done_;
     }
 
-    Object(const Object& other)
-        : name_(other.name_)
+    bool operator<(const Task& other) const
     {
-        std::cout
-            << "Copy construct: "
-            << name_
-            << '\n';
+        return priority_ < other.priority_;
     }
 
-    Object& operator=(const Object& other)
-    {
-        std::cout
-            << "Copy assign\n";
-
-        name_ = other.name_;
-
-        return *this;
-    }
-
-    Object(Object&& other) noexcept
-        : name_(std::move(other.name_))
-    {
-        std::cout
-            << "Move construct: "
-            << name_
-            << '\n';
-    }
-
-    Object& operator=(Object&& other) noexcept
-    {
-        std::cout
-            << "Move assign\n";
-
-        name_ = std::move(other.name_);
-
-        return *this;
-    }
+    friend std::ostream& operator<<(
+        std::ostream& output,
+        const Task& task
+    );
 
 private:
-    std::string name_;
+    std::string text_;
+    int priority_;
+    bool done_;
 };
+
+std::ostream& operator<<(
+    std::ostream& output,
+    const Task& task
+)
+{
+    output
+        << '['
+        << (task.done_ ? 'x' : ' ')
+        << "] "
+        << task.text_
+        << " (priority="
+        << task.priority_
+        << ')';
+
+    return output;
+}
+
+#include <algorithm>
+#include <vector>
 
 int main()
 {
-    Object a("A");
+    Task a("Learn C++", 2);
+    Task b("Practice STL", 1);
+    Task c("Learn C++", 2);
 
-    std::cout << "--- copy construct ---\n";
+    std::cout
+        << "a == c: "
+        << (a == c)
+        << '\n';
 
-    Object b = a;
+    std::vector<Task> tasks{
+        a,
+        b,
+        c
+    };
 
-    std::cout << "--- copy assign ---\n";
+    std::sort(
+        tasks.begin(),
+        tasks.end()
+    );
 
-    Object c("C");
-    c = a;
-
-    std::cout << "--- move construct ---\n";
-
-    Object d = std::move(a);
-
-    std::cout << "--- move assign ---\n";
-
-    Object e("E");
-    e = std::move(b);
+    for (const auto& task : tasks)
+    {
+        std::cout << task << '\n';
+    }
 }
