@@ -1,5 +1,6 @@
 #include <iostream>
 #include <string>
+#include <vector>
 
 class Task
 {
@@ -8,33 +9,35 @@ public:
         : text_(text)
     {
         std::cout
-            << "Construct: "
+            << "Contruct: "
             << text_
             << '\n';
     }
 
     ~Task()
     {
-        std::cout
+        std::cout 
             << "Destroy: "
             << text_
             << '\n';
     }
-
 private:
     std::string text_;
 };
 
-int main()
+void run()
 {
     Task first("First");
+    std::vector<int> values{
+        1, 2, 3, 4, 5
+    };
+    Task second("Second");
+    std::cout << "run() ending\n";
+}
 
-    {
-        Task second("Second");
-        Task third("Third");
-    }
-
-    Task fourth("Fourth");
-
-    return 0;
+int main()
+{
+    std::cout << "Before run()\n";
+    run();
+    std::cout << "After run()\n";
 }
