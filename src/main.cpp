@@ -1,43 +1,100 @@
 #include <iostream>
+#include <memory>
 #include <string>
-#include <vector>
 
-class Task
+class Resource
 {
 public:
-    Task(std::string text)
-        : text_(text)
+    Resource(std::string name)
+        : name_(std::move(name))
     {
         std::cout
-            << "Contruct: "
-            << text_
+            << "Create: "
+            << name_
             << '\n';
     }
 
-    ~Task()
+    ~Resource()
     {
-        std::cout 
+        std::cout
             << "Destroy: "
-            << text_
+            << name_
             << '\n';
     }
+
 private:
-    std::string text_;
+    std::string name_;
 };
 
-void run()
+void uniqueDemo()
 {
-    Task first("First");
-    std::vector<int> values{
-        1, 2, 3, 4, 5
-    };
-    Task second("Second");
-    std::cout << "run() ending\n";
+    auto first =
+        std::make_unique<Resource>("Unique");
+
+    auto second =
+        std::move(first);
+
+    if (!first)
+    {
+        std::cout << "first is empty\n";
+    }
+}
+
+void sharedDemo()
+{
+    auto first =
+        std::make_shared<Resource>("Shared");
+
+    std::cout
+        << first.use_count()
+        << '\n';
+
+    {
+        auto second = first;
+
+        std::cout
+            << first.use_count()
+            << '\n';
+    }
+
+    std::cout
+        << first.use_count()
+        << '\n';
+}
+
+void weakDemo()
+{
+    std::weak_ptr<Resource> weak;
+
+    {
+        auto shared =
+            std::make_shared<Resource>("Weak target");
+
+        weak = shared;
+
+        if (auto locked = weak.lock())
+        {
+            std::cout
+                << "Object is alive\n";
+        }
+    }
+
+    if (weak.expired())
+    {
+        std::cout
+            << "Object is gone\n";
+    }
 }
 
 int main()
 {
-    std::cout << "Before run()\n";
-    run();
-    std::cout << "After run()\n";
+    uniqueDemo();
+
+    std::cout << "---\n";
+
+    sharedDemo();
+
+    std::cout << "---\n";
+
+    weakDemo();
 }
