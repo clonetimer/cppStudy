@@ -1,143 +1,240 @@
-# Command Line Calculator
+# Todo CLI
 
-A simple command-line calculator written in C++.
+A small command-line todo application written in modern C++.
 
-The project supports basic arithmetic operations and is organized using separate source and header files. CMake is used as the build system.
+The project is used to practice C++ fundamentals including STL containers, file I/O, classes, RAII, smart pointers, move semantics, unit testing, debugging, and basic code-quality tooling.
 
 ## Features
 
-- Addition: `+`
-- Subtraction: `-`
-- Multiplication: `*`
-- Division: `/`
-- Continuous calculations without restarting the program
-- Exit using `q` or `Q`
-- Invalid input handling
-- Unsupported operator handling
-- Division-by-zero handling
+The application supports:
 
-## Example
+- Adding tasks
+- Listing tasks
+- Marking tasks as completed
+- Removing tasks
+- Saving tasks to a local file
+- Loading tasks on the next program run
+
+Example:
 
 ```text
-=== Calculator ===
+$ ./build/todo add Learn GoogleTest
+$ ./build/todo add Practice GDB
 
-Enter first number (or q to quit): 10
-Enter operator (+ - * /): +
-Enter second number: 20
-Result: 30
+$ ./build/todo list
+1. [ ] Learn GoogleTest
+2. [ ] Practice GDB
 
-Enter first number (or q to quit): 8
-Enter operator (+ - * /): /
-Enter second number: 2
-Result: 4
+$ ./build/todo done 1
 
-Enter first number (or q to quit): q
-Bye.
+$ ./build/todo list
+1. [x] Learn GoogleTest
+2. [ ] Practice GDB
+
+$ ./build/todo remove 2
 ```
 
 ## Project Structure
 
 ```text
-calculator/
+todo-cli/
+├── .github/
+│   └── workflows/
+│       └── ci.yml
+├── .clang-format
+├── .clang-tidy
 ├── CMakeLists.txt
 ├── README.md
-├── .gitignore
 ├── include/
-│   └── calculator.h
-└── src/
-    ├── calculator.cpp
-    └── main.cpp
+│   ├── task.h
+│   └── task_manager.h
+├── src/
+│   ├── main.cpp
+│   ├── task.cpp
+│   └── task_manager.cpp
+└── tests/
+    ├── task_test.cpp
+    └── task_manager_test.cpp
 ```
 
-`calculator.h` declares the calculator functions.
+`Task` represents a single todo item.
 
-`calculator.cpp` implements the arithmetic operations.
+`TaskManager` owns and manages the collection of tasks and handles persistence.
 
-`main.cpp` handles user input, program flow, and error reporting.
+`main.cpp` parses command-line arguments and delegates operations to `TaskManager`.
 
 ## Requirements
 
-- C++17 compatible compiler
+- C++17-compatible compiler
 - CMake 3.16 or later
+- Git
 
-Example tools:
-
-- GCC / G++
-- CMake
+Test dependencies such as GoogleTest are downloaded automatically by CMake.
 
 ## Build
 
-From the project root directory:
+Configure a Debug build:
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake \
+    -S . \
+    -B build \
+    -DCMAKE_BUILD_TYPE=Debug
+```
+
+Build the project:
+
+```bash
 cmake --build build
 ```
 
-The executable will be generated in the `build` directory.
-
 ## Run
 
+List tasks:
+
 ```bash
-./build/calculator
+./build/todo list
 ```
 
-Example:
+Add a task:
+
+```bash
+./build/todo add Learn modern C++
+```
+
+Mark a task as completed:
+
+```bash
+./build/todo done 1
+```
+
+Remove a task:
+
+```bash
+./build/todo remove 1
+```
+
+## Tests
+
+Build the project first:
+
+```bash
+cmake --build build
+```
+
+Run all tests:
+
+```bash
+ctest \
+    --test-dir build \
+    --output-on-failure
+```
+
+The tests cover `Task` and `TaskManager`, including normal operations, invalid task numbers, removal behavior, completion state, and save/load persistence.
+
+## Sanitizers
+
+A separate sanitizer build can be created if the project enables the `ENABLE_SANITIZERS` CMake option:
+
+```bash
+cmake \
+    -S . \
+    -B build-sanitize \
+    -DCMAKE_BUILD_TYPE=Debug \
+    -DENABLE_SANITIZERS=ON
+
+cmake --build build-sanitize
+
+ctest \
+    --test-dir build-sanitize \
+    --output-on-failure
+```
+
+This build enables AddressSanitizer and UndefinedBehaviorSanitizer on supported GCC/Clang configurations.
+
+## Code Quality
+
+The project is compiled with warnings such as:
 
 ```text
-Enter first number: 10
-Enter operator (+ - * /): *
-Enter second number: 5
-Result: 50
+-Wall
+-Wextra
+-Wpedantic
 ```
 
-## Error Handling
+Source formatting is controlled by `.clang-format`.
 
-Invalid number:
+Static analysis configuration is stored in `.clang-tidy`.
+
+Generate a compilation database for clang-tidy with:
+
+```bash
+cmake \
+    -S . \
+    -B build \
+    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+```
+
+Example static analysis:
+
+```bash
+clang-tidy \
+    -p build \
+    src/task.cpp \
+    src/task_manager.cpp
+```
+
+Example formatting:
+
+```bash
+clang-format -i \
+    src/*.cpp \
+    include/*.h \
+    tests/*.cpp
+```
+
+## Persistence
+
+Tasks are stored in:
 
 ```text
-Enter first number: abc
-Error: first input must be a number.
+tasks.txt
 ```
 
-Unsupported operator:
+The file is runtime data and is normally excluded from Git.
+
+If the file does not exist, the application starts with an empty task list.
+
+Malformed task data is treated as an error instead of being silently ignored.
+
+## Continuous Integration
+
+GitHub Actions automatically builds and tests the project on pushes and pull requests.
+
+The CI workflow is located at:
 
 ```text
-Enter first number: 10
-Enter operator (+ - * /): %
-Enter second number: 2
-Error: unsupported operator '%'.
+.github/workflows/ci.yml
 ```
 
-Division by zero:
+A change should not be considered ready if the CI build or test suite fails.
 
-```text
-Enter first number: 10
-Enter operator (+ - * /): /
-Enter second number: 0
-Error: division by zero
+## Current Design Notes
+
+`TaskManager` owns its tasks.
+
+In the current learning implementation this ownership may be represented with:
+
+```cpp
+std::vector<std::unique_ptr<Task>>
 ```
 
-## Build Design
+This is primarily used to practice RAII and ownership semantics.
 
-The calculation logic is built as a separate CMake library target:
+For a small value-type such as `Task`, a production implementation could also reasonably use:
 
-```text
-calculator.cpp
-      ↓
-calculator_lib
-      ↓
-     link
-      ↓
-calculator executable
-      ↑
-   main.cpp
+```cpp
+std::vector<Task>
 ```
 
-This separates calculation logic from command-line input and output.
-
-## Current Limitations
-
-- Only one calculation is performed per program execution.
-- Supported operators are limited to `+`, `-`, `*`, and `/`.
-- The program does not currently retry after invalid input.
+which may be simpler and avoid unnecessary dynamic allocation.

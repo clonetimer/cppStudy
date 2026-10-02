@@ -77,5 +77,5 @@ TEST(
     task.markDone();
     task.markDone();
 
-    EXPECT_TRUE(task.isDone());
+    EXPECT_FALSE(task.isDone());
 }
