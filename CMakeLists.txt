@@ -28,6 +28,19 @@ target_compile_features(
     cxx_std_17
 )
 
+if (
+    CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang"
+)
+    target_compile_options(
+        todo_lib
+        PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+endif()
+
+
 # -------------------------
 # ASan,UBSan
 # -------------------------
