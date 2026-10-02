@@ -9,7 +9,7 @@ const std::string& Task::text() const { return text_; }
 
 bool Task::isDone() const { return done_; }
 
-void Task::markDone() { done_ = !done_; }
+void Task::markDone() { done_ = true; }
 
 bool Task::operator==(const Task& other) const {
     return text_ == other.text_ && done_ == other.done_;
