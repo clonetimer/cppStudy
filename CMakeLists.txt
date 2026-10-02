@@ -29,6 +29,44 @@ target_compile_features(
 )
 
 # -------------------------
+# ASan,UBSan
+# -------------------------
+option(
+    ENABLE_SANITIZERS
+    "Enable AddressSanitizer and UndefinedBehaviorSanitizer"
+    OFF
+)
+if (
+    ENABLE_SANITIZERS
+    AND
+    CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang"
+)
+    add_library(
+        sanitizers
+        INTERFACE
+    )
+
+    target_compile_options(
+        sanitizers
+        INTERFACE
+        -fsanitize=address,undefined
+        -fno-omit-frame-pointer
+    )
+
+    target_link_options(
+        sanitizers
+        INTERFACE
+        -fsanitize=address,undefined
+    )
+
+    target_link_libraries(
+        todo_lib
+        PUBLIC
+        sanitizers
+    )
+endif()
+
+# -------------------------
 # 正式程序
 # -------------------------
 
