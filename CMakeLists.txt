@@ -66,6 +66,7 @@ enable_testing()
 add_executable(
     todo_tests
     tests/task_test.cpp
+    tests/task_manager_test.cpp
 )
 
 target_link_libraries(

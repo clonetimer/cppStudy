@@ -11,6 +11,8 @@
 class TaskManager
 {
 public:
+    const Task* getTask(std::size_t taskNumber) const;
+
     void addTask(std::string text);
 
     bool markTaskDone(std::size_t taskNumber);

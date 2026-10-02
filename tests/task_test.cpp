@@ -19,6 +19,16 @@ TEST(TaskTest, NewTaskIsNotDone)
     EXPECT_FALSE(task.isDone());
 }
 
+TEST(TaskTest, CanStartAsCompleted)
+{
+    Task task(
+        "Existing task",
+        true
+    );
+
+    EXPECT_TRUE(task.isDone());
+}
+
 TEST(TaskTest, MarkDoneChangesState)
 {
     Task task("Learn GoogleTest");
@@ -28,12 +38,32 @@ TEST(TaskTest, MarkDoneChangesState)
     EXPECT_TRUE(task.isDone());
 }
 
-TEST(TaskTest, CanRestoreCompletedTask)
+TEST(TaskTest, EqualTasksCompareEqual)
 {
-    Task task(
-        "Existing task",
+    Task first(
+        "Learn C++",
         true
     );
 
-    EXPECT_TRUE(task.isDone());
+    Task second(
+        "Learn C++",
+        true
+    );
+
+    EXPECT_TRUE(first == second);
+}
+
+TEST(TaskTest, DifferentStateIsNotEqual)
+{
+    Task first(
+        "Learn C++",
+        false
+    );
+
+    Task second(
+        "Learn C++",
+        true
+    );
+
+    EXPECT_FALSE(first == second);
 }

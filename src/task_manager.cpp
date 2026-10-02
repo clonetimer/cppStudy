@@ -7,6 +7,19 @@
 #include <stdexcept>
 #include <utility>
 
+const Task* TaskManager::getTask(
+    std::size_t taskNumber
+) const
+{
+    if (taskNumber == 0 || 
+        taskNumber > tasks_.size())
+    {
+        return nullptr;
+    }
+
+    return tasks_[taskNumber - 1].get();
+}
+
 void TaskManager::addTask(std::string text)
 {
     tasks_.push_back(
