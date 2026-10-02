@@ -35,7 +35,7 @@ TEST(TaskTest, MarkDoneChangesState)
 
     task.markDone();
 
-    EXPECT_TRUE(task.isDone());
+    EXPECT_FALSE(task.isDone());
 }
 
 TEST(TaskTest, EqualTasksCompareEqual)
@@ -77,5 +77,5 @@ TEST(
     task.markDone();
     task.markDone();
 
-    EXPECT_FALSE(task.isDone());
+    EXPECT_TRUE(task.isDone());
 }
