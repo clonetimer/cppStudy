@@ -33,3 +33,30 @@ jobs:
           ctest \
             --test-dir build \
             --output-on-failure
+
+  sanitizers:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Configure with sanitizers
+        run: |
+          cmake \
+            -S . \
+            -B build-sanitize \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DENABLE_SANITIZERS=ON
+
+      - name: Build
+        run: |
+          cmake \
+            --build build-sanitize \
+            --parallel
+
+      - name: Test
+        run: |
+          ctest \
+            --test-dir build-sanitize \
+            --output-on-failure
