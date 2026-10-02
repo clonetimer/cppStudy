@@ -67,3 +67,15 @@ TEST(TaskTest, DifferentStateIsNotEqual)
 
     EXPECT_FALSE(first == second);
 }
+TEST(
+    TaskTest,
+    MarkDoneIsIdempotent
+)
+{
+    Task task("Learn GDB");
+
+    task.markDone();
+    task.markDone();
+
+    EXPECT_TRUE(task.isDone());
+}

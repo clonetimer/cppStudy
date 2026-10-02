@@ -24,7 +24,7 @@ bool Task::isDone() const
 
 void Task::markDone()
 {
-    done_ = true;
+    done_ = !done_;
 }
 
 bool Task::operator==(const Task& other) const
