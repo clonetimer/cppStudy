@@ -1,77 +1,125 @@
-#include <condition_variable>
+#include "thread_safe_queue.h"
+
+#include <chrono>
+#include <iostream>
 #include <mutex>
-#include <queue>
 #include <string>
 #include <thread>
-#include <iostream>
+#include <vector>
 
-class BlockingQueue
+std::mutex outputMutex;
+
+void printLine(const std::string& text)
 {
-public:
-    void push(std::string value)
-    {
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> lock(outputMutex);
 
-            queue_.push(value);
-        }
-
-        condition_.notify_one();
-    }
-
-    std::string pop()
-    {
-        std::unique_lock<std::mutex> lock(mutex_);
-
-        condition_.wait(
-            lock,
-            [this]()
-            {
-                return !queue_.empty();
-            }
-        );
-
-        std::string value = queue_.front();
-        queue_.pop();
-
-        return value;
-    }
-
-private:
-    std::queue<std::string> queue_;
-
-    std::mutex mutex_;
-
-    std::condition_variable condition_;
-};
-
-BlockingQueue queue;
-
-void producer()
-{
-    queue.push("load file");
-    queue.push("process data");
-    queue.push("save results");
+    std::cout << text << '\n';
 }
 
-void consumer()
+void producer(
+    ThreadSafeQueue<int>& queue,
+    int producerId,
+    int start,
+    int count
+)
 {
-    std::string value = queue.pop();
+    for (int i = 0; i < count; ++i)
+    {
+        int value = start + i;
 
-    std::cout << value << '\n';
+        if (!queue.push(value))
+        {
+            return;
+        }
+
+        printLine(
+            "Producer "
+            + std::to_string(producerId)
+            + " produced "
+            + std::to_string(value)
+        );
+
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(50)
+        );
+    }
+}
+
+void consumer(
+    ThreadSafeQueue<int>& queue,
+    int consumerId
+)
+{
+    while (true)
+    {
+        std::optional<int> value =
+            queue.waitAndPop();
+
+        if (!value)
+        {
+            break;
+        }
+
+        printLine(
+            "Consumer "
+            + std::to_string(consumerId)
+            + " processed "
+            + std::to_string(*value)
+        );
+
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(100)
+        );
+    }
+
+    printLine(
+        "Consumer "
+        + std::to_string(consumerId)
+        + " exiting"
+    );
 }
 
 int main()
 {
-    std::thread producerThread(producer);
+    ThreadSafeQueue<int> queue;
 
-    std::thread c1(consumer);
-    std::thread c2(consumer);
-    std::thread c3(consumer);
+    std::thread producer1(
+        producer,
+        std::ref(queue),
+        1,
+        100,
+        5
+    );
 
-    producerThread.join();
+    std::thread producer2(
+        producer,
+        std::ref(queue),
+        2,
+        200,
+        5
+    );
 
-    c1.join();
-    c2.join();
-    c3.join();
+    std::thread consumer1(
+        consumer,
+        std::ref(queue),
+        1
+    );
+
+    std::thread consumer2(
+        consumer,
+        std::ref(queue),
+        2
+    );
+
+    producer1.join();
+    producer2.join();
+
+    queue.close();
+
+    consumer1.join();
+    consumer2.join();
+
+    std::cout << "All work finished.\n";
+
+    return 0;
 }
