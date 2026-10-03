@@ -34,29 +34,30 @@ jobs:
             --test-dir build \
             --output-on-failure
 
-  sanitizers:
+  thread-sanitizer:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Configure with sanitizers
+      - name: Configure with TSan
         run: |
           cmake \
             -S . \
-            -B build-sanitize \
+            -B build-tsan \
             -DCMAKE_BUILD_TYPE=Debug \
-            -DENABLE_SANITIZERS=ON
+            -DENABLE_TSAN=ON
 
       - name: Build
         run: |
           cmake \
-            --build build-sanitize \
+            --build build-tsan \
             --parallel
 
-      - name: Test
+      - name: Test with TSan
         run: |
-          ctest \
-            --test-dir build-sanitize \
-            --output-on-failure
+          setarch "$(uname -m)" -R \
+            ctest \
+              --test-dir build-tsan \
+              --output-on-failure
