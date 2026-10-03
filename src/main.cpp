@@ -1,92 +1,53 @@
-#include <cerrno>
-#include <cstring>
+#include <chrono>
 #include <iostream>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <unistd.h>
+#include <thread>
 
-int main(
-    int argc,
-    char* argv[]
+void task(
+    int id,
+    int milliseconds
 )
 {
-    if (argc < 2)
-    {
-        std::cerr
-            << "Usage: run <command> [args...]\n";
+    std::cout
+        << "Task "
+        << id
+        << " started\n";
 
-        return 1;
-    }
+    std::this_thread::sleep_for(
+        std::chrono::milliseconds(
+            milliseconds
+        )
+    );
 
-    pid_t pid = fork();
+    std::cout
+        << "Task "
+        << id
+        << " finished\n";
+}
 
-    if (pid == -1)
-    {
-        std::cerr
-            << "fork failed: "
-            << std::strerror(errno)
-            << '\n';
+int main()
+{
+    std::thread t1(
+        task,
+        1,
+        1000
+    );
 
-        return 1;
-    }
+    std::thread t2(
+        task,
+        2,
+        500
+    );
 
-    if (pid == 0)
-    {
-        execvp(
-            argv[1],
-            &argv[1]
-        );
+    std::thread t3(
+        task,
+        3,
+        1500
+    );
 
-        // execvp 成功不会返回
-        std::cerr
-            << "exec failed: "
-            << std::strerror(errno)
-            << '\n';
+    t1.join();
+    t2.join();
+    t3.join();
 
-        _exit(127);
-    }
-
-    int status = 0;
-
-    pid_t result =
-        waitpid(
-            pid,
-            &status,
-            0
-        );
-
-    if (result == -1)
-    {
-        std::cerr
-            << "waitpid failed: "
-            << std::strerror(errno)
-            << '\n';
-
-        return 1;
-    }
-
-    if (WIFEXITED(status))
-    {
-        int exitCode =
-            WEXITSTATUS(status);
-
-        std::cout
-            << "Child exited with code "
-            << exitCode
-            << '\n';
-
-        return exitCode;
-    }
-
-    if (WIFSIGNALED(status))
-    {
-        std::cout
-            << "Child terminated by signal "
-            << WTERMSIG(status)
-            << '\n';
-
-        return 1;
-    }
-
-    return 1;
+    std::cout
+        << "All tasks finished\n";
 }
