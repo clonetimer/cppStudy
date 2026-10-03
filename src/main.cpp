@@ -1,53 +1,33 @@
-#include <chrono>
 #include <iostream>
+#include <mutex>
 #include <thread>
+#include <vector>
 
-void task(
-    int id,
-    int milliseconds
-)
+std::vector<int> values;
+std::mutex valuesMutex;
+
+void worker(int start)
 {
-    std::cout
-        << "Task "
-        << id
-        << " started\n";
+    for (int i = 0; i < 10000; ++i)
+    {
+        std::lock_guard<std::mutex> lock(
+            valuesMutex
+        );
 
-    std::this_thread::sleep_for(
-        std::chrono::milliseconds(
-            milliseconds
-        )
-    );
-
-    std::cout
-        << "Task "
-        << id
-        << " finished\n";
+        values.push_back(start + i);
+    }
 }
 
 int main()
 {
-    std::thread t1(
-        task,
-        1,
-        1000
-    );
-
-    std::thread t2(
-        task,
-        2,
-        500
-    );
-
-    std::thread t3(
-        task,
-        3,
-        1500
-    );
+    std::thread t1(worker, 0);
+    std::thread t2(worker, 10000);
 
     t1.join();
     t2.join();
-    t3.join();
 
     std::cout
-        << "All tasks finished\n";
+        << "size = "
+        << values.size()
+        << '\n';
 }
