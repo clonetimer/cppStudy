@@ -1,87 +1,92 @@
-#include <fcntl.h>
+#include <cerrno>
+#include <cstring>
 #include <iostream>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
-bool writeAll(
-    int fd,
-    const char* buffer,
-    std::size_t size
+int main(
+    int argc,
+    char* argv[]
 )
 {
-    std::size_t totalWritten = 0;
-
-    while (totalWritten < size)
-    {
-        ssize_t written =
-            write(
-                fd,
-                buffer + totalWritten,
-                size - totalWritten
-            );
-
-        if (written == -1)
-        {
-            return false;
-        }
-
-        totalWritten +=
-            static_cast<std::size_t>(written);
-    }
-
-    return true;
-}
-
-int main()
-{
-    int fd = open(
-        "scores.txt",
-        O_RDONLY
-    );
-
-    if (fd == -1)
+    if (argc < 2)
     {
         std::cerr
-            << "Failed to open file\n";
+            << "Usage: run <command> [args...]\n";
+
         return 1;
     }
 
-    char buffer[128];
+    pid_t pid = fork();
 
-    while (true)
+    if (pid == -1)
     {
-        ssize_t bytesRead =
-            read(
-                fd,
-                buffer,
-                sizeof(buffer)
-            );
+        std::cerr
+            << "fork failed: "
+            << std::strerror(errno)
+            << '\n';
 
-        if (bytesRead > 0)
-        {
-            if (!writeAll(STDOUT_FILENO, buffer, static_cast<std::size_t>(bytesRead)))
-            {
-                std::cerr
-                    << "Write failed\n";
-
-                close(fd);
-                return 1;
-            }
-        }
-        else if (bytesRead == 0)
-        {
-            break;
-        }
-        else
-        {
-            std::cerr
-                << "Read failed\n";
-
-            close(fd);
-            return 1;
-        }
+        return 1;
     }
 
-    close(fd);
+    if (pid == 0)
+    {
+        execvp(
+            argv[1],
+            &argv[1]
+        );
 
-    return 0;
+        // execvp 成功不会返回
+        std::cerr
+            << "exec failed: "
+            << std::strerror(errno)
+            << '\n';
+
+        _exit(127);
+    }
+
+    int status = 0;
+
+    pid_t result =
+        waitpid(
+            pid,
+            &status,
+            0
+        );
+
+    if (result == -1)
+    {
+        std::cerr
+            << "waitpid failed: "
+            << std::strerror(errno)
+            << '\n';
+
+        return 1;
+    }
+
+    if (WIFEXITED(status))
+    {
+        int exitCode =
+            WEXITSTATUS(status);
+
+        std::cout
+            << "Child exited with code "
+            << exitCode
+            << '\n';
+
+        return exitCode;
+    }
+
+    if (WIFSIGNALED(status))
+    {
+        std::cout
+            << "Child terminated by signal "
+            << WTERMSIG(status)
+            << '\n';
+
+        return 1;
+    }
+
+    return 1;
 }
