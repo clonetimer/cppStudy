@@ -2,73 +2,71 @@
 
 #include <chrono>
 #include <iostream>
+#include <string>
 #include <thread>
+#include <vector>
+
+int add(int a, int b)
+{
+    return a + b;
+}
 
 int main()
 {
     ThreadPool pool(4);
 
-    auto first =
+    auto sum =
         pool.submit(
-            []()
-            {
-                return 10 + 20;
-            }
+            add,
+            10,
+            20
         );
 
-    auto second =
+    auto text =
         pool.submit(
-            []()
+            [](std::string value)
             {
-                return std::string(
-                    "Hello ThreadPool"
-                );
-            }
+                return value
+                    + " ThreadPool";
+            },
+            std::string("Hello")
         );
 
-    auto third =
-        pool.submit(
-            []()
-            {
-                std::this_thread::sleep_for(
-                    std::chrono::seconds(1)
-                );
+    std::vector<
+        std::future<int>
+    > futures;
 
-                return 100;
-            }
-        );
-    
-    std::cout
-        << first.get()
-        << '\n';
-
-    std::cout
-        << second.get()
-        << '\n';
-
-    std::cout
-        << third.get()
-        << '\n';
-
-    auto bad =
-        pool.submit(
-            []() -> int
-            {
-                throw std::runtime_error(
-                    "boom"
-                );
-            }
-        );
-    
-    try
+    for (int i = 0; i < 10; ++i)
     {
-        bad.get();
+        futures.push_back(
+            pool.submit(
+                [i]()
+                {
+                    std::this_thread::sleep_for(
+                        std::chrono::milliseconds(100)
+                    );
+
+                    return i * i;
+                }
+            )
+        );
     }
-    catch (const std::exception& error)
+
+    std::cout
+        << "sum = "
+        << sum.get()
+        << '\n';
+
+    std::cout
+        << text.get()
+        << '\n';
+
+    for (auto& future : futures)
     {
         std::cout
-            << "Caught: "
-            << error.what()
-            << '\n';
-    }    
+            << future.get()
+            << ' ';
+    }
+
+    std::cout << '\n';
 }
