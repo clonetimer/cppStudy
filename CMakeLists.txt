@@ -1,80 +1,33 @@
 cmake_minimum_required(VERSION 3.16)
 
 project(
-    ProducerConsumer
+    ThreadPool
     VERSION 1.0.0
     LANGUAGES CXX
 )
 
-find_package(
-    Threads
-    REQUIRED
+# --------------------------------------------------
+# Global options
+# --------------------------------------------------
+
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+option(
+    BUILD_TESTS
+    "Build unit tests"
+    ON
 )
 
-include(FetchContent)
-
-FetchContent_Declare(
-    googletest
-    URL
-    https://github.com/google/googletest/archive/refs/tags/v1.18.0.zip
+option(
+    BUILD_BENCHMARKS
+    "Build simple benchmarks"
+    ON
 )
 
-FetchContent_MakeAvailable(googletest)
-
-enable_testing()
-
-add_executable(
-    producer_consumer
-    src/main.cpp
-)
-
-target_include_directories(
-    producer_consumer
-    PRIVATE
-    include
-)
-
-target_compile_features(
-    producer_consumer
-    PRIVATE
-    cxx_std_17
-)
-
-target_link_libraries(
-    producer_consumer
-    PRIVATE
-    Threads::Threads
-)
-
-add_executable(
-    queue_tests
-    tests/thread_safe_queue_test.cpp
-)
-
-target_include_directories(
-    queue_tests
-    PRIVATE
-    include
-)
-
-target_compile_features(
-    queue_tests
-    PRIVATE
-    cxx_std_17
-)
-
-target_link_libraries(
-    queue_tests
-    PRIVATE
-    Threads::Threads
-    GTest::gtest_main
-)
-
-include(GoogleTest)
-
-gtest_discover_tests(
-    queue_tests
-    DISCOVERY_MODE PRE_TEST
+option(
+    ENABLE_ASAN_UBSAN
+    "Enable AddressSanitizer and UndefinedBehaviorSanitizer"
+    OFF
 )
 
 option(
@@ -83,47 +36,209 @@ option(
     OFF
 )
 
-if (
-    ENABLE_TSAN
-    AND
+if (ENABLE_ASAN_UBSAN AND ENABLE_TSAN)
+    message(
+        FATAL_ERROR
+        "ASan/UBSan and TSan must use separate builds."
+    )
+endif()
+
+# --------------------------------------------------
+# Threads
+# --------------------------------------------------
+
+find_package(
+    Threads
+    REQUIRED
+)
+
+# --------------------------------------------------
+# Compiler warnings
+# --------------------------------------------------
+
+add_library(
+    project_warnings
+    INTERFACE
+)
+
+if (MSVC)
+    target_compile_options(
+        project_warnings
+        INTERFACE
+        /W4
+    )
+elseif (
     CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang"
 )
     target_compile_options(
-        producer_consumer
-        PRIVATE
-        -fsanitize=thread
-        -fno-omit-frame-pointer
+        project_warnings
+        INTERFACE
+        -Wall
+        -Wextra
+        -Wpedantic
     )
+endif()
 
-    target_link_options(
-        producer_consumer
-        PRIVATE
-        -fsanitize=thread
-    )
+# --------------------------------------------------
+# Sanitizers
+# --------------------------------------------------
 
-    target_compile_options(
-        queue_tests
-        PRIVATE
-        -fsanitize=thread
-        -fno-omit-frame-pointer
-    )
+add_library(
+    project_sanitizers
+    INTERFACE
+)
 
-    target_link_options(
-        queue_tests
-        PRIVATE
-        -fsanitize=thread
-    )
+if (
+    CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang"
+)
 
-add_executable(
-    thread_pool_benchmark
-    benchmark/thread_pool_benchmark.cpp
+    if (ENABLE_ASAN_UBSAN)
+        target_compile_options(
+            project_sanitizers
+            INTERFACE
+            -fsanitize=address,undefined
+            -fno-omit-frame-pointer
+        )
+
+        target_link_options(
+            project_sanitizers
+            INTERFACE
+            -fsanitize=address,undefined
+        )
+    endif()
+
+    if (ENABLE_TSAN)
+        target_compile_options(
+            project_sanitizers
+            INTERFACE
+            -fsanitize=thread
+            -fno-omit-frame-pointer
+        )
+
+        target_link_options(
+            project_sanitizers
+            INTERFACE
+            -fsanitize=thread
+        )
+    endif()
+
+endif()
+
+# --------------------------------------------------
+# ThreadPool library
+# --------------------------------------------------
+
+add_library(
+    thread_pool
+    src/thread_pool.cpp
+)
+
+target_include_directories(
+    thread_pool
+    PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_compile_features(
+    thread_pool
+    PUBLIC
+    cxx_std_17
 )
 
 target_link_libraries(
-    thread_pool_benchmark
+    thread_pool
+    PUBLIC
+    Threads::Threads
+    project_warnings
+    project_sanitizers
+)
+
+# --------------------------------------------------
+# Demo executable
+# --------------------------------------------------
+
+add_executable(
+    thread_pool_demo
+    src/main.cpp
+)
+
+target_link_libraries(
+    thread_pool_demo
     PRIVATE
     thread_pool
-    Threads::Threads
 )
+
+# --------------------------------------------------
+# Tests
+# --------------------------------------------------
+
+if (BUILD_TESTS)
+
+    include(FetchContent)
+
+    FetchContent_Declare(
+        googletest
+        GIT_REPOSITORY
+        https://github.com/google/googletest.git
+        GIT_TAG
+        v1.18.0
+        GIT_SHALLOW
+        TRUE
+    )
+
+    # Prevent installing GoogleTest together with this project.
+    set(
+        INSTALL_GTEST
+        OFF
+        CACHE BOOL ""
+        FORCE
+    )
+
+    FetchContent_MakeAvailable(
+        googletest
+    )
+
+    enable_testing()
+
+    add_executable(
+        thread_pool_tests
+        tests/thread_pool_test.cpp
+    )
+
+    target_link_libraries(
+        thread_pool_tests
+        PRIVATE
+        thread_pool
+        GTest::gtest_main
+    )
+
+    include(GoogleTest)
+
+    # Important:
+    # Do not execute the test binary during the build phase.
+    # This avoids the TSan discovery problem encountered earlier.
+    gtest_discover_tests(
+        thread_pool_tests
+        DISCOVERY_MODE PRE_TEST
+    )
+
+endif()
+
+# --------------------------------------------------
+# Simple benchmark
+# --------------------------------------------------
+
+if (BUILD_BENCHMARKS)
+
+    add_executable(
+        thread_pool_benchmark
+        benchmark/thread_pool_benchmark.cpp
+    )
+
+    target_link_libraries(
+        thread_pool_benchmark
+        PRIVATE
+        thread_pool
+    )
 
 endif()

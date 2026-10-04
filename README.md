@@ -1,128 +1,174 @@
-# Todo CLI
+# C++17 Thread Pool
 
-A small command-line todo application written in modern C++.
+A small but practical C++17 thread pool implemented from scratch for learning modern C++ concurrency and resource-management techniques.
 
-The project is used to practice C++ fundamentals including STL containers, file I/O, classes, RAII, smart pointers, move semantics, unit testing, debugging, and basic code-quality tooling.
+The project demonstrates:
 
-## Features
+- Worker-thread reuse
+- Thread-safe task queuing
+- `std::mutex`
+- `std::condition_variable`
+- RAII-based thread lifetime management
+- `std::future`
+- `std::packaged_task`
+- Perfect forwarding
+- Exception propagation
+- Graceful shutdown
+- Atomic statistics
+- Unit testing
+- Sanitizers
+- Basic benchmarking
+- Thread-safe logging
 
-The application supports:
+## Architecture
 
-- Adding tasks
-- Listing tasks
-- Marking tasks as completed
-- Removing tasks
-- Saving tasks to a local file
-- Loading tasks on the next program run
-
-Example:
-
-```text
-$ ./build/todo add Learn GoogleTest
-$ ./build/todo add Practice GDB
-
-$ ./build/todo list
-1. [ ] Learn GoogleTest
-2. [ ] Practice GDB
-
-$ ./build/todo done 1
-
-$ ./build/todo list
-1. [x] Learn GoogleTest
-2. [ ] Practice GDB
-
-$ ./build/todo remove 2
-```
-
-## Project Structure
+The core execution model is:
 
 ```text
-todo-cli/
-├── .github/
-│   └── workflows/
-│       └── ci.yml
-├── .clang-format
-├── .clang-tidy
-├── CMakeLists.txt
-├── README.md
-├── include/
-│   ├── task.h
-│   └── task_manager.h
-├── src/
-│   ├── main.cpp
-│   ├── task.cpp
-│   └── task_manager.cpp
-└── tests/
-    ├── task_test.cpp
-    └── task_manager_test.cpp
+                submit()
+                   |
+                   v
+        +----------------------+
+        |      Task Queue      |
+        | std::function<void()>|
+        +----------------------+
+                   |
+         mutex + condition
+                   |
+        +----------+----------+
+        |          |          |
+        v          v          v
+     Worker 1   Worker 2   Worker N
+        |          |          |
+        +------ execute -------+
 ```
 
-`Task` represents a single todo item.
+Worker threads are created when the `ThreadPool` is constructed and are reused for multiple tasks.
 
-`TaskManager` owns and manages the collection of tasks and handles persistence.
+Workers sleep on a `std::condition_variable` when no work is available instead of busy waiting.
 
-`main.cpp` parses command-line arguments and delegates operations to `TaskManager`.
+## Task Submission
+
+Tasks may return values:
+
+```cpp
+ThreadPool pool(4);
+
+auto result = pool.submit(
+    [](int a, int b)
+    {
+        return a + b;
+    },
+    10,
+    20
+);
+
+std::cout << result.get() << '\n';
+```
+
+Output:
+
+```text
+30
+```
+
+`submit()` automatically returns:
+
+```cpp
+std::future<ReturnType>
+```
+
+where `ReturnType` is inferred from the submitted callable.
+
+## Exception Propagation
+
+Exceptions thrown by tasks are propagated through their futures:
+
+```cpp
+auto future = pool.submit(
+    []() -> int
+    {
+        throw std::runtime_error("task failed");
+    }
+);
+
+try
+{
+    future.get();
+}
+catch (const std::exception& error)
+{
+    std::cerr << error.what() << '\n';
+}
+```
+
+A failed task does not terminate the entire thread pool.
+
+## Shutdown
+
+The pool performs graceful shutdown.
+
+The lifecycle is:
+
+```text
+Running
+   |
+   | shutdown()
+   v
+Stopping
+   |
+   | reject new submissions
+   | execute already queued tasks
+   v
+Queue empty
+   |
+   v
+Workers exit
+   |
+   v
+Joined / stopped
+```
+
+Once shutdown begins:
+
+- New tasks are rejected.
+- Already submitted tasks continue running.
+- Workers exit only when the queue becomes empty.
+- All worker threads are joined.
+
+The destructor automatically performs shutdown, following RAII principles.
 
 ## Requirements
 
 - C++17-compatible compiler
 - CMake 3.16 or later
+- POSIX threads / supported C++ threading implementation
 - Git
 
-Test dependencies such as GoogleTest are downloaded automatically by CMake.
+GoogleTest is downloaded automatically when tests are enabled.
 
 ## Build
 
-Configure a Debug build:
+Debug build:
 
 ```bash
 cmake \
     -S . \
     -B build \
     -DCMAKE_BUILD_TYPE=Debug
+
+cmake --build build --parallel
 ```
 
-Build the project:
+Run the demo:
 
 ```bash
-cmake --build build
-```
-
-## Run
-
-List tasks:
-
-```bash
-./build/todo list
-```
-
-Add a task:
-
-```bash
-./build/todo add Learn modern C++
-```
-
-Mark a task as completed:
-
-```bash
-./build/todo done 1
-```
-
-Remove a task:
-
-```bash
-./build/todo remove 1
+./build/thread_pool_demo
 ```
 
 ## Tests
 
-Build the project first:
-
-```bash
-cmake --build build
-```
-
-Run all tests:
+Run:
 
 ```bash
 ctest \
@@ -130,111 +176,150 @@ ctest \
     --output-on-failure
 ```
 
-The tests cover `Task` and `TaskManager`, including normal operations, invalid task numbers, removal behavior, completion state, and save/load persistence.
+The test suite covers areas including:
 
-## Sanitizers
+- Returning task results
+- Argument forwarding
+- Multiple return types
+- Future-based exception propagation
+- Worker survival after task failure
+- Graceful shutdown
+- Rejecting submissions after shutdown
+- Concurrent execution
 
-A separate sanitizer build can be created if the project enables the `ENABLE_SANITIZERS` CMake option:
+## AddressSanitizer / UndefinedBehaviorSanitizer
+
+Create a separate sanitizer build:
 
 ```bash
 cmake \
     -S . \
     -B build-sanitize \
     -DCMAKE_BUILD_TYPE=Debug \
-    -DENABLE_SANITIZERS=ON
+    -DENABLE_ASAN_UBSAN=ON
 
-cmake --build build-sanitize
+cmake --build build-sanitize --parallel
 
 ctest \
     --test-dir build-sanitize \
     --output-on-failure
 ```
 
-This build enables AddressSanitizer and UndefinedBehaviorSanitizer on supported GCC/Clang configurations.
+## ThreadSanitizer
 
-## Code Quality
-
-The project is compiled with warnings such as:
-
-```text
--Wall
--Wextra
--Wpedantic
-```
-
-Source formatting is controlled by `.clang-format`.
-
-Static analysis configuration is stored in `.clang-tidy`.
-
-Generate a compilation database for clang-tidy with:
+ThreadSanitizer is built separately from ASan/UBSan:
 
 ```bash
 cmake \
     -S . \
-    -B build \
-    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+    -B build-tsan \
+    -DCMAKE_BUILD_TYPE=Debug \
+    -DENABLE_TSAN=ON
+
+cmake --build build-tsan --parallel
+
+ctest \
+    --test-dir build-tsan \
+    --output-on-failure
 ```
 
-Example static analysis:
+TSan is used to detect data races in concurrent code.
+
+Some Linux or WSL configurations may have ThreadSanitizer runtime/address-space compatibility issues unrelated to the thread-pool implementation.
+
+## Benchmark
+
+The included benchmark compares serial execution with the thread pool.
+
+Always use a Release build for performance measurements:
 
 ```bash
-clang-tidy \
-    -p build \
-    src/task.cpp \
-    src/task_manager.cpp
+cmake \
+    -S . \
+    -B build-release \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_TESTS=OFF
+
+cmake --build build-release --parallel
+
+./build-release/thread_pool_benchmark
 ```
 
-Example formatting:
+The benchmark validates that serial and parallel executions produce the same result before reporting timing information.
 
-```bash
-clang-format -i \
-    src/*.cpp \
-    include/*.h \
-    tests/*.cpp
-```
+Benchmark results are intended for rough trend comparison rather than rigorous microbenchmarking.
 
-## Persistence
+Do not benchmark with sanitizers or verbose logging enabled.
 
-Tasks are stored in:
+## Logging
+
+The project includes a small thread-safe logger for observing events such as:
+
+- Worker startup
+- Worker shutdown
+- Pool shutdown
+- Task lifecycle information
+
+Logging is synchronized to avoid interleaved output from multiple threads.
+
+Verbose logging should be disabled during performance measurements.
+
+## Project Structure
 
 ```text
-tasks.txt
+thread-pool/
+├── .github/
+│   └── workflows/
+│       └── ci.yml
+├── benchmark/
+│   └── thread_pool_benchmark.cpp
+├── include/
+│   ├── logger.h
+│   └── thread_pool.h
+├── src/
+│   ├── main.cpp
+│   └── thread_pool.cpp
+├── tests/
+│   └── thread_pool_test.cpp
+├── .clang-format
+├── .clang-tidy
+├── .gitignore
+├── CMakeLists.txt
+└── README.md
 ```
 
-The file is runtime data and is normally excluded from Git.
+## Design Notes
 
-If the file does not exist, the application starts with an empty task list.
-
-Malformed task data is treated as an error instead of being silently ignored.
-
-## Continuous Integration
-
-GitHub Actions automatically builds and tests the project on pushes and pull requests.
-
-The CI workflow is located at:
-
-```text
-.github/workflows/ci.yml
-```
-
-A change should not be considered ready if the CI build or test suite fails.
-
-## Current Design Notes
-
-`TaskManager` owns its tasks.
-
-In the current learning implementation this ownership may be represented with:
+The queue stores:
 
 ```cpp
-std::vector<std::unique_ptr<Task>>
+std::function<void()>
 ```
 
-This is primarily used to practice RAII and ownership semantics.
+Submitted functions and their arguments are wrapped in `std::packaged_task`, allowing task return values and exceptions to be transferred through `std::future`.
 
-For a small value-type such as `Task`, a production implementation could also reasonably use:
+In the C++17 implementation, a `std::shared_ptr<std::packaged_task<...>>` is used to adapt the move-only packaged task to the copyable callable requirements of `std::function`.
 
-```cpp
-std::vector<Task>
-```
+Shared queue state is protected with a mutex.
 
-which may be simpler and avoid unnecessary dynamic allocation.
+Simple independent statistics may use `std::atomic`.
+
+Atomic variables are not used as a replacement for mutexes when multiple pieces of state must remain consistent.
+
+## Current Limitations
+
+This is intentionally a compact educational thread pool.
+
+It currently does not implement:
+
+- Task priorities
+- Work stealing
+- Dynamic worker resizing
+- Task cancellation
+- Bounded queues / backpressure
+- CPU affinity
+- Coroutine integration
+- Dependency graphs
+- Production-grade scheduling policies
+
+These features are intentionally outside the scope of the first stable release.

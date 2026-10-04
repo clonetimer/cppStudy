@@ -9,10 +9,11 @@ permissions:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    name: Build and Test
+    runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v7
 
       - name: Configure
@@ -34,20 +35,51 @@ jobs:
             --test-dir build \
             --output-on-failure
 
-  thread-sanitizer:
-    runs-on: ubuntu-latest
+  asan-ubsan:
+    name: ASan and UBSan
+    runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Configure with TSan
+      - name: Configure
+        run: |
+          cmake \
+            -S . \
+            -B build-sanitize \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DENABLE_ASAN_UBSAN=ON \
+            -DBUILD_BENCHMARKS=OFF
+
+      - name: Build
+        run: |
+          cmake \
+            --build build-sanitize \
+            --parallel
+
+      - name: Test
+        run: |
+          ctest \
+            --test-dir build-sanitize \
+            --output-on-failure
+
+  thread-sanitizer:
+    name: ThreadSanitizer
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure
         run: |
           cmake \
             -S . \
             -B build-tsan \
             -DCMAKE_BUILD_TYPE=Debug \
-            -DENABLE_TSAN=ON
+            -DENABLE_TSAN=ON \
+            -DBUILD_BENCHMARKS=OFF
 
       - name: Build
         run: |
@@ -55,9 +87,8 @@ jobs:
             --build build-tsan \
             --parallel
 
-      - name: Test with TSan
+      - name: Test
         run: |
-          setarch "$(uname -m)" -R \
-            ctest \
-              --test-dir build-tsan \
-              --output-on-failure
+          ctest \
+            --test-dir build-tsan \
+            --output-on-failure
