@@ -1,4 +1,5 @@
 #include "thread_pool.h"
+#include "logger.h"
 
 ThreadPool::ThreadPool(
     std::size_t workerCount
@@ -31,6 +32,9 @@ ThreadPool::~ThreadPool()
 
 void ThreadPool::shutdown()
 {
+    Logger::log(
+        LogLevel::Info,
+        "shutdown requested");
     {
         std::lock_guard<std::mutex> lock(mutex_);
 
@@ -51,6 +55,9 @@ void ThreadPool::shutdown()
             worker.join();
         }
     }
+    Logger::log(
+        LogLevel::Info,
+        "all workers joined");
 }
 
 bool ThreadPool::isStopping() const
@@ -62,6 +69,10 @@ bool ThreadPool::isStopping() const
 
 void ThreadPool::workerLoop()
 {
+    Logger::log(
+        LogLevel::Debug,
+        "worker started");
+
     while (true)
     {
         std::function<void()> task;

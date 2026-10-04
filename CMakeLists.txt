@@ -113,4 +113,17 @@ if (
         PRIVATE
         -fsanitize=thread
     )
+
+add_executable(
+    thread_pool_benchmark
+    benchmark/thread_pool_benchmark.cpp
+)
+
+target_link_libraries(
+    thread_pool_benchmark
+    PRIVATE
+    thread_pool
+    Threads::Threads
+)
+
 endif()
