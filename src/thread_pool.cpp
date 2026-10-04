@@ -26,10 +26,18 @@ ThreadPool::ThreadPool(
 
 ThreadPool::~ThreadPool()
 {
+    shutdown();
+}
+
+void ThreadPool::shutdown()
+{
     {
-        std::lock_guard<std::mutex> lock(
-            mutex_
-        );
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        if (stopping_)
+        {
+            return;
+        }
 
         stopping_ = true;
     }
@@ -43,6 +51,13 @@ ThreadPool::~ThreadPool()
             worker.join();
         }
     }
+}
+
+bool ThreadPool::isStopping() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    return stopping_;
 }
 
 void ThreadPool::workerLoop()

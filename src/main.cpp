@@ -13,60 +13,41 @@ int add(int a, int b)
 
 int main()
 {
-    ThreadPool pool(4);
+    ThreadPool pool(2);
 
-    auto sum =
+    auto bad =
         pool.submit(
-            add,
-            10,
-            20
-        );
-
-    auto text =
-        pool.submit(
-            [](std::string value)
+            []() -> int
             {
-                return value
-                    + " ThreadPool";
-            },
-            std::string("Hello")
+                throw std::runtime_error(
+                    "boom"
+                );
+            }
         );
 
-    std::vector<
-        std::future<int>
-    > futures;
+    auto good =
+        pool.submit(
+            []()
+            {
+                return 42;
+            }
+        );
 
-    for (int i = 0; i < 10; ++i)
+    try
     {
-        futures.push_back(
-            pool.submit(
-                [i]()
-                {
-                    std::this_thread::sleep_for(
-                        std::chrono::milliseconds(100)
-                    );
-
-                    return i * i;
-                }
-            )
-        );
+        bad.get();
     }
-
-    std::cout
-        << "sum = "
-        << sum.get()
-        << '\n';
-
-    std::cout
-        << text.get()
-        << '\n';
-
-    for (auto& future : futures)
+    catch (const std::exception& error)
     {
         std::cout
-            << future.get()
-            << ' ';
+            << "bad task: "
+            << error.what()
+            << '\n';
     }
 
-    std::cout << '\n';
+    std::cout
+        << "good task: "
+        << good.get()
+        << '\n';
+
 }

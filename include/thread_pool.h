@@ -23,12 +23,18 @@ public:
 
     ~ThreadPool();
 
-    ThreadPool(const ThreadPool&) = delete;
+    ThreadPool(
+        const ThreadPool&
+    ) = delete;
+
     ThreadPool& operator=(
         const ThreadPool&
     ) = delete;
 
-    template <typename F, typename... Args>
+    template <
+        typename F,
+        typename... Args
+    >
     auto submit(
         F&& function,
         Args&&... args
@@ -39,56 +45,51 @@ public:
                 Args...
             >
         >
-    {
-        using ReturnType =
-            std::invoke_result_t<
-                F,
-                Args...
-            >;
-
-        auto task =
-            std::make_shared<
-                std::packaged_task<
-                    ReturnType()
-                >
-            >(
-                std::bind(
-                    std::forward<F>(
-                        function
-                    ),
-                    std::forward<Args>(
-                        args
-                    )...
-                )
-            );
-
-        std::future<ReturnType> future =
-            task->get_future();
-
         {
-            std::lock_guard<std::mutex> lock(
-                mutex_
-            );
+            using ReturnType =
+                std::invoke_result_t<
+                    F,
+                    Args...
+                >;
 
-            if (stopping_)
+            auto task =
+                std::make_shared<
+                    std::packaged_task<
+                        ReturnType()
+                    >
+                >(
+                    std::bind(
+                        std::forward<F>(function),
+                        std::forward<Args>(args)...
+                    )
+                );
+
             {
-                throw std::runtime_error(
-                    "cannot submit task to stopped ThreadPool"
+                std::lock_guard<std::mutex> lock(mutex_);
+
+                if (stopping_)
+                {
+                    throw std::runtime_error(
+                        "cannot submit task to stopping thread pool"
+                    );
+                }
+
+                tasks_.emplace(
+                    [task]()
+                    {
+                        (*task)();
+                    }
                 );
             }
 
-            tasks_.push(
-                [task]()
-                {
-                    (*task)();
-                }
-            );
-        }
+            condition_.notify_one();
 
-        condition_.notify_one();
+            return task->get_future();
+        };
 
-        return future;
-    }
+    void shutdown();
+
+    bool isStopping() const;
 
 private:
     void workerLoop();
@@ -100,7 +101,7 @@ private:
         std::function<void()>
     > tasks_;
 
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
 
     std::condition_variable condition_;
 
