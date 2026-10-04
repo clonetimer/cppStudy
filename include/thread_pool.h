@@ -10,6 +10,7 @@
 #include <thread>
 #include <utility>
 #include <vector>
+#include <future>
 
 class ThreadPool
 {
@@ -60,26 +61,47 @@ public:
     ThreadPool(const ThreadPool&) = delete;
     ThreadPool& operator=(const ThreadPool&) = delete;
 
-    void submit(
-        std::function<void()> task
-    )
+    template <typename F>
+    auto submit(F&& function)
     {
+        using ReturnType =
+            std::invoke_result_t<F>;
+
+        auto task =
+            std::make_shared<
+                std::packaged_task<
+                    ReturnType()
+                >
+            >(
+                std::forward<F>(function)
+            );
+
+        std::future<ReturnType> future =
+            task->get_future();
+
         {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::lock_guard<std::mutex> lock(
+                mutex_
+            );
 
             if (stopping_)
             {
                 throw std::runtime_error(
-                    "cannot submit task to stopped ThreadPool"
+                    "cannot submit to stopped pool"
                 );
             }
 
             tasks_.push(
-                std::move(task)
+                [task]()
+                {
+                    (*task)();
+                }
             );
         }
 
         condition_.notify_one();
+
+        return future;
     }
 
 private:

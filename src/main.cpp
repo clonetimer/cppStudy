@@ -2,49 +2,73 @@
 
 #include <chrono>
 #include <iostream>
-#include <mutex>
 #include <thread>
-
-std::mutex outputMutex;
-
-void log(
-    const std::string& message
-)
-{
-    std::lock_guard<std::mutex> lock(
-        outputMutex
-    );
-
-    std::cout
-        << message
-        << '\n';
-}
 
 int main()
 {
     ThreadPool pool(4);
 
-    for (int i = 0; i < 8; ++i)
-    {
+    auto first =
         pool.submit(
-            [i]()
+            []()
             {
-                log(
-                    "Task "
-                    + std::to_string(i)
-                    + " start"
-                );
+                return 10 + 20;
+            }
+        );
 
+    auto second =
+        pool.submit(
+            []()
+            {
+                return std::string(
+                    "Hello ThreadPool"
+                );
+            }
+        );
+
+    auto third =
+        pool.submit(
+            []()
+            {
                 std::this_thread::sleep_for(
                     std::chrono::seconds(1)
                 );
 
-                log(
-                    "Task "
-                    + std::to_string(i)
-                    + " end"
+                return 100;
+            }
+        );
+    
+    std::cout
+        << first.get()
+        << '\n';
+
+    std::cout
+        << second.get()
+        << '\n';
+
+    std::cout
+        << third.get()
+        << '\n';
+
+    auto bad =
+        pool.submit(
+            []() -> int
+            {
+                throw std::runtime_error(
+                    "boom"
                 );
             }
         );
+    
+    try
+    {
+        bad.get();
     }
+    catch (const std::exception& error)
+    {
+        std::cout
+            << "Caught: "
+            << error.what()
+            << '\n';
+    }    
 }
