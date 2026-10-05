@@ -2,18 +2,52 @@
 #include <cerrno>
 #include <cstring>
 #include <iostream>
+#include <string>
 #include <sys/socket.h>
 #include <unistd.h>
 
+bool sendAll(
+    int fd,
+    const char* data,
+    std::size_t size
+)
+{
+    std::size_t total = 0;
+
+    while (total < size)
+    {
+        ssize_t sent = send(
+            fd,
+            data + total,
+            size - total,
+            0
+        );
+
+        if (sent == -1)
+        {
+            std::cerr
+                << "send failed: "
+                << std::strerror(errno)
+                << '\n';
+
+            return false;
+        }
+
+        total += sent;
+    }
+    return true;
+}
+
+
 int main()
 {
-    int socketFd = socket(
+    int fd = socket(
         AF_INET,
         SOCK_STREAM,
         0
     );
 
-    if (socketFd == -1)
+    if (fd == -1)
     {
         std::cerr
             << "socket failed: "
@@ -31,24 +65,15 @@ int main()
     serverAddress.sin_port =
         htons(8080);
 
-    if (
-        inet_pton(
-            AF_INET,
-            "127.0.0.1",
-            &serverAddress.sin_addr
-        ) != 1
-    )
-    {
-        std::cerr
-            << "invalid address\n";
-
-        close(socketFd);
-        return 1;
-    }
+    inet_pton(
+        AF_INET,
+        "127.0.0.1",
+        &serverAddress.sin_addr
+    );
 
     if (
         connect(
-            socketFd,
+            fd,
             reinterpret_cast<sockaddr*>(
                 &serverAddress
             ),
@@ -61,53 +86,51 @@ int main()
             << std::strerror(errno)
             << '\n';
 
-        close(socketFd);
+        close(fd);
         return 1;
     }
 
-    char buffer[1024];
+    std::string line;
 
-    ssize_t received =
-        recv(
-            socketFd,
+    while (
+        std::getline(
+            std::cin,
+            line
+        )
+    )
+    {
+        line += '\n';
+
+        if (!sendAll(
+            fd,
+            line.data(),
+            line.size()
+        ))
+        {
+            break;
+        }
+
+        char buffer[4096];
+
+        ssize_t received = recv(
+            fd,
             buffer,
             sizeof(buffer),
             0
         );
 
-    if (received > 0)
-    {
+        if (received <= 0)
+        {
+            break;
+        }
+
         std::cout.write(
             buffer,
             received
         );
     }
 
-    while (true)
-    {
-        std::string input;
-
-        std::cout
-            << "Enter message: ";
-        std::getline(
-            std::cin,
-            input
-        );
-
-        if (input.empty())
-        {
-            break;
-        }
-
-        send(
-            socketFd,
-            input.c_str(),
-            input.size(),
-            0
-        );
-    }
-
-    close(socketFd);
+    close(fd);
 
     return 0;
 }

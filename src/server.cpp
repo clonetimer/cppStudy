@@ -1,9 +1,81 @@
 #include <arpa/inet.h>
-#include <cerrno>
-#include <cstring>
-#include <iostream>
 #include <sys/socket.h>
+
+#include <iostream>
+#include <cstring>
+#include <cerrno>
 #include <unistd.h>
+#include <thread>
+
+bool sendAll(
+    int fd,
+    const char* data,
+    std::size_t size
+)
+{
+    std::size_t total = 0;
+
+    while (total < size)
+    {
+        ssize_t sent = send(
+            fd,
+            data + total,
+            size - total,
+            0
+        );
+
+        if (sent == -1)
+        {
+            std::cerr
+                << "send failed: "
+                << std::strerror(errno)
+                << '\n';
+
+            return false;
+        }
+
+        total += sent;
+    }
+    return true;
+}
+
+void handleClient(int clinetFd)
+{
+    char buffer[4096];
+
+
+    while (true)
+    {
+        ssize_t received = recv(
+            clinetFd,
+            buffer,
+            sizeof(buffer),
+            0
+        );
+
+        if (received == -1)
+        {
+            std::cerr
+                << "recv failed: "
+                << std::strerror(errno)
+                << '\n';
+
+            break;
+        }
+        else if (received == 0)
+        {
+            std::cout
+                << "client disconnected\n";
+
+            break;
+        }
+
+        if (!sendAll(clinetFd, buffer, received))
+        {
+            break;
+        }
+    }
+}
 
 int main()
 {
@@ -33,23 +105,21 @@ int main()
         sizeof(option)
     );
 
-    sockaddr_in address{};
+    sockaddr_in serverAddress{};
 
-    address.sin_family = AF_INET;
-
-    address.sin_addr.s_addr =
-        htonl(INADDR_ANY);
-
-    address.sin_port =
+    serverAddress.sin_family =
+        AF_INET;
+    serverAddress.sin_port =
         htons(8080);
-
+    serverAddress.sin_addr.s_addr =
+        INADDR_ANY;
     if (
         bind(
             serverFd,
             reinterpret_cast<sockaddr*>(
-                &address
+                &serverAddress
             ),
-            sizeof(address)
+            sizeof(serverAddress)
         ) == -1
     )
     {
@@ -65,7 +135,7 @@ int main()
     if (
         listen(
             serverFd,
-            16
+            SOMAXCONN
         ) == -1
     )
     {
@@ -79,74 +149,55 @@ int main()
     }
 
     std::cout
-        << "Server listening on port 8080\n";
-
-    int clientFd = accept(
-        serverFd,
-        nullptr,
-        nullptr
-    );
-
-    if (clientFd == -1)
-    {
-        std::cerr
-            << "accept failed: "
-            << std::strerror(errno)
-            << '\n';
-
-        close(serverFd);
-        return 1;
-    }
-
-    const char message[] =
-        "Hello from server\n";
-
-    send(
-        clientFd,
-        message,
-        sizeof(message) - 1,
-        0
-    );
+        << "server listening on port 8080\n";
 
     while (true)
     {
-        char buffer[1024];
+        sockaddr_in clientAddress{};
+        socklen_t clientAddressSize =
+            sizeof(clientAddress);
 
-        ssize_t bytesRead = recv(
-            clientFd,
-            buffer,
-            sizeof(buffer) - 1,
-            0
+        int clientFd = accept(
+            serverFd,
+            reinterpret_cast<sockaddr*>(
+                &clientAddress
+            ),
+            &clientAddressSize
         );
 
-        if (bytesRead == -1)
+        if (clientFd == -1)
         {
             std::cerr
-                << "recv failed: "
+                << "accept failed: "
                 << std::strerror(errno)
                 << '\n';
 
-            break;
+            continue;
         }
 
-        if (bytesRead == 0)
-        {
-            std::cout
-                << "Client disconnected\n";
+        char ip[INET_ADDRSTRLEN];
 
-            break;
-        }
-
-        buffer[bytesRead] = '\0';
+        inet_ntop(
+            AF_INET,
+            &clientAddress.sin_addr,
+            ip,
+            sizeof(ip)
+        );
 
         std::cout
-            << "Received from client: "
-            << buffer
+            << "Client connected: "
+            << ip
+            << ':'
+            << ntohs(clientAddress.sin_port)
             << '\n';
+
+        std::thread(
+            handleClient,
+            clientFd
+        ).detach();
     }
 
-    close(clientFd);
     close(serverFd);
-
     return 0;
+    
 }
