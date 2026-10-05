@@ -3,9 +3,9 @@
 #include <cstring>
 #include <fcntl.h>
 #include <iostream>
+#include <sys/epoll.h>
 #include <sys/socket.h>
 #include <unistd.h>
-#include <vector>
 
 bool setNonBlocking(int fd)
 {
@@ -83,12 +83,16 @@ int main()
     }
 
     if (
-        listen(serverFd, 128)
-        == -1
+        listen(
+            serverFd,
+            128
+        ) == -1
     )
     {
         std::cerr
-            << "listen failed\n";
+            << "listen failed: "
+            << std::strerror(errno)
+            << '\n';
 
         close(serverFd);
         return 1;
@@ -97,123 +101,274 @@ int main()
     if (!setNonBlocking(serverFd))
     {
         std::cerr
-            << "failed to set server nonblocking\n";
+            << "failed to set server socket non-blocking\n";
 
         close(serverFd);
         return 1;
     }
 
-    std::vector<int> clients;
+    int epollFd = epoll_create1(0);
+
+    if (epollFd == -1)
+    {
+        std::cerr
+            << "epoll_create1 failed: "
+            << std::strerror(errno)
+            << '\n';
+
+        close(serverFd);
+        return 1;
+    }
+
+    epoll_event serverEvent{};
+
+    serverEvent.events =
+        EPOLLIN;
+
+    serverEvent.data.fd =
+        serverFd;
+
+    if (
+        epoll_ctl(
+            epollFd,
+            EPOLL_CTL_ADD,
+            serverFd,
+            &serverEvent
+        ) == -1
+    )
+    {
+        std::cerr
+            << "epoll_ctl failed: "
+            << std::strerror(errno)
+            << '\n';
+
+        close(epollFd);
+        close(serverFd);
+
+        return 1;
+    }
+
+    constexpr int MaxEvents = 64;
+
+    epoll_event events[MaxEvents];
 
     std::cout
-        << "Non-blocking server listening on 8080\n";
+        << "epoll server listening on port 8080\n";
 
     while (true)
     {
-        // 1. 尽量 accept 新连接
-        while (true)
-        {
-            int clientFd = accept(
-                serverFd,
-                nullptr,
-                nullptr
+        int eventCount =
+            epoll_wait(
+                epollFd,
+                events,
+                MaxEvents,
+                -1
             );
 
-            if (clientFd >= 0)
+        if (eventCount == -1)
+        {
+            if (errno == EINTR)
             {
-                if (!setNonBlocking(clientFd))
-                {
-                    close(clientFd);
-                    continue;
-                }
-
-                clients.push_back(
-                    clientFd
-                );
-
-                std::cout
-                    << "Client connected, fd="
-                    << clientFd
-                    << '\n';
-
                 continue;
             }
 
-            if (
-                errno == EAGAIN ||
-                errno == EWOULDBLOCK
-            )
-            {
-                break;
-            }
-
             std::cerr
-                << "accept failed: "
+                << "epoll_wait failed: "
                 << std::strerror(errno)
                 << '\n';
 
             break;
         }
 
-        // 2. 检查每一个 client
-        for (auto it = clients.begin();
-             it != clients.end();)
+        for (int i = 0;
+             i < eventCount;
+             ++i)
         {
-            int clientFd = *it;
+            int fd =
+                events[i].data.fd;
 
-            char buffer[4096];
+            std::uint32_t currentEvents =
+                events[i].events;
 
-            ssize_t received =
-                recv(
-                    clientFd,
-                    buffer,
-                    sizeof(buffer),
-                    0
-                );
-
-            if (received > 0)
+            if (fd == serverFd)
             {
-                std::cout
-                    << "fd "
-                    << clientFd
-                    << " received "
-                    << received
-                    << " bytes\n";
+                while (true)
+                {
+                    int clientFd =
+                        accept(
+                            serverFd,
+                            nullptr,
+                            nullptr
+                        );
 
-                ++it;
+                    if (clientFd >= 0)
+                    {
+                        if (
+                            !setNonBlocking(
+                                clientFd
+                            )
+                        )
+                        {
+                            close(clientFd);
+                            continue;
+                        }
+
+                        epoll_event clientEvent{};
+
+                        clientEvent.events =
+                            EPOLLIN;
+
+                        clientEvent.data.fd =
+                            clientFd;
+
+                        if (
+                            epoll_ctl(
+                                epollFd,
+                                EPOLL_CTL_ADD,
+                                clientFd,
+                                &clientEvent
+                            ) == -1
+                        )
+                        {
+                            close(clientFd);
+                            continue;
+                        }
+
+                        std::cout
+                            << "Client connected, fd="
+                            << clientFd
+                            << '\n';
+
+                        continue;
+                    }
+
+                    if (
+                        errno == EAGAIN ||
+                        errno == EWOULDBLOCK
+                    )
+                    {
+                        break;
+                    }
+
+                    std::cerr
+                        << "accept failed: "
+                        << std::strerror(errno)
+                        << '\n';
+
+                    break;
+                }
+
+                continue;
             }
-            else if (received == 0)
-            {
-                std::cout
-                    << "Client disconnected, fd="
-                    << clientFd
-                    << '\n';
 
-                close(clientFd);
-
-                it = clients.erase(it);
-            }
-            else if (
-                errno == EAGAIN ||
-                errno == EWOULDBLOCK
+            if (
+                currentEvents
+                & (
+                    EPOLLERR |
+                    EPOLLHUP
+                )
             )
             {
-                // 没数据，正常情况
-                ++it;
+                epoll_ctl(
+                    epollFd,
+                    EPOLL_CTL_DEL,
+                    fd,
+                    nullptr
+                );
+
+                close(fd);
+
+                continue;
             }
-            else
+
+            if (
+                currentEvents
+                & EPOLLIN
+            )
             {
-                std::cerr
-                    << "recv error on fd "
-                    << clientFd
-                    << ": "
-                    << std::strerror(errno)
-                    << '\n';
+                bool disconnected = false;
 
-                close(clientFd);
+                while (true)
+                {
+                    char buffer[4096];
 
-                it = clients.erase(it);
+                    ssize_t received =
+                        recv(
+                            fd,
+                            buffer,
+                            sizeof(buffer),
+                            0
+                        );
+
+                    if (received > 0)
+                    {
+                        // 教学版 echo：
+                        // 暂时直接 send。
+                        ssize_t sent =
+                            send(
+                                fd,
+                                buffer,
+                                static_cast<
+                                    std::size_t
+                                >(received),
+                                MSG_NOSIGNAL
+                            );
+
+                        if (sent < 0)
+                        {
+                            if (
+                                errno != EAGAIN &&
+                                errno != EWOULDBLOCK
+                            )
+                            {
+                                disconnected =
+                                    true;
+                            }
+                        }
+
+                        continue;
+                    }
+
+                    if (received == 0)
+                    {
+                        disconnected = true;
+                        break;
+                    }
+
+                    if (
+                        errno == EAGAIN ||
+                        errno == EWOULDBLOCK
+                    )
+                    {
+                        break;
+                    }
+
+                    disconnected = true;
+                    break;
+                }
+
+                if (disconnected)
+                {
+                    std::cout
+                        << "Client disconnected, fd="
+                        << fd
+                        << '\n';
+
+                    epoll_ctl(
+                        epollFd,
+                        EPOLL_CTL_DEL,
+                        fd,
+                        nullptr
+                    );
+
+                    close(fd);
+                }
             }
         }
     }
+
+    close(epollFd);
+    close(serverFd);
+
+    return 0;
 }
