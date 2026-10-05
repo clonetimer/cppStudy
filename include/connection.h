@@ -14,6 +14,8 @@ struct Connection
     std::string writeBuffer;
 
     bool registered = false;
+
+    bool closeRequested = false;
 };
 
 #endif

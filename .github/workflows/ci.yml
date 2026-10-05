@@ -35,7 +35,7 @@ jobs:
             --test-dir build \
             --output-on-failure
 
-  asan-ubsan:
+  sanitizers:
     name: ASan and UBSan
     runs-on: ubuntu-24.04
 
@@ -49,8 +49,7 @@ jobs:
             -S . \
             -B build-sanitize \
             -DCMAKE_BUILD_TYPE=Debug \
-            -DENABLE_ASAN_UBSAN=ON \
-            -DBUILD_BENCHMARKS=OFF
+            -DENABLE_SANITIZERS=ON
 
       - name: Build
         run: |
@@ -62,33 +61,4 @@ jobs:
         run: |
           ctest \
             --test-dir build-sanitize \
-            --output-on-failure
-
-  thread-sanitizer:
-    name: ThreadSanitizer
-    runs-on: ubuntu-24.04
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Configure
-        run: |
-          cmake \
-            -S . \
-            -B build-tsan \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DENABLE_TSAN=ON \
-            -DBUILD_BENCHMARKS=OFF
-
-      - name: Build
-        run: |
-          cmake \
-            --build build-tsan \
-            --parallel
-
-      - name: Test
-        run: |
-          ctest \
-            --test-dir build-tsan \
             --output-on-failure
