@@ -1,43 +1,42 @@
 #include <arpa/inet.h>
+#include <atomic>
 #include <cerrno>
 #include <cstring>
 #include <iostream>
 #include <string>
 #include <sys/socket.h>
+#include <thread>
 #include <unistd.h>
 
 bool sendAll(
     int fd,
-    const char* data,
-    std::size_t size
+    const std::string& data
 )
 {
-    std::size_t total = 0;
+    std::size_t offset = 0;
 
-    while (total < size)
+    while (offset < data.size())
     {
         ssize_t sent = send(
             fd,
-            data + total,
-            size - total,
-            0
+            data.data() + offset,
+            data.size() - offset,
+            MSG_NOSIGNAL
         );
 
-        if (sent == -1)
+        if (sent <= 0)
         {
-            std::cerr
-                << "send failed: "
-                << std::strerror(errno)
-                << '\n';
-
             return false;
         }
 
-        total += sent;
+        offset +=
+            static_cast<std::size_t>(
+                sent
+            );
     }
+
     return true;
 }
-
 
 int main()
 {
@@ -49,35 +48,37 @@ int main()
 
     if (fd == -1)
     {
-        std::cerr
-            << "socket failed: "
-            << std::strerror(errno)
-            << '\n';
-
         return 1;
     }
 
-    sockaddr_in serverAddress{};
+    sockaddr_in address{};
 
-    serverAddress.sin_family =
+    address.sin_family =
         AF_INET;
 
-    serverAddress.sin_port =
+    address.sin_port =
         htons(8080);
 
-    inet_pton(
-        AF_INET,
-        "127.0.0.1",
-        &serverAddress.sin_addr
-    );
+    if (
+        inet_pton(
+            AF_INET,
+            "127.0.0.1",
+            &address.sin_addr
+        ) != 1
+    )
+    {
+        close(fd);
+
+        return 1;
+    }
 
     if (
         connect(
             fd,
             reinterpret_cast<sockaddr*>(
-                &serverAddress
+                &address
             ),
-            sizeof(serverAddress)
+            sizeof(address)
         ) == -1
     )
     {
@@ -87,50 +88,114 @@ int main()
             << '\n';
 
         close(fd);
+
         return 1;
     }
+
+    std::string nickname;
+
+    std::cout
+        << "Nickname: ";
+
+    std::getline(
+        std::cin,
+        nickname
+    );
+
+    if (
+        !sendAll(
+            fd,
+            "NICK "
+                + nickname
+                + "\n"
+        )
+    )
+    {
+        close(fd);
+
+        return 1;
+    }
+
+    std::atomic<bool> running{
+        true
+    };
+
+    std::thread receiver(
+        [&]()
+        {
+            char buffer[4096];
+
+            while (running.load())
+            {
+                ssize_t received =
+                    recv(
+                        fd,
+                        buffer,
+                        sizeof(buffer),
+                        0
+                    );
+
+                if (received > 0)
+                {
+                    std::cout.write(
+                        buffer,
+                        received
+                    );
+
+                    std::cout.flush();
+
+                    continue;
+                }
+
+                running.store(false);
+
+                break;
+            }
+        }
+    );
 
     std::string line;
 
     while (
+        running.load()
+        &&
         std::getline(
             std::cin,
             line
         )
     )
     {
-        line += '\n';
-
-        if (!sendAll(
-            fd,
-            line.data(),
-            line.size()
-        ))
+        if (
+            !sendAll(
+                fd,
+                line + "\n"
+            )
+        )
         {
             break;
         }
 
-        char buffer[4096];
-
-        ssize_t received = recv(
-            fd,
-            buffer,
-            sizeof(buffer),
-            0
-        );
-
-        if (received <= 0)
+        if (line == "/quit")
         {
             break;
         }
-
-        std::cout.write(
-            buffer,
-            received
-        );
     }
 
+    running.store(false);
+
+    shutdown(
+        fd,
+        SHUT_RDWR
+    );
+
     close(fd);
+
+    if (
+        receiver.joinable()
+    )
+    {
+        receiver.join();
+    }
 
     return 0;
 }

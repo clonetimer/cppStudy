@@ -1,11 +1,16 @@
+#include "connection.h"
+
 #include <arpa/inet.h>
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
 #include <iostream>
+#include <string>
 #include <sys/epoll.h>
 #include <sys/socket.h>
+#include <unordered_map>
 #include <unistd.h>
+#include <vector>
 
 bool setNonBlocking(int fd)
 {
@@ -25,6 +30,346 @@ bool setNonBlocking(int fd)
         F_SETFL,
         flags | O_NONBLOCK
     ) != -1;
+}
+
+bool updateEvents(
+    int epollFd,
+    const Connection& connection
+)
+{
+    epoll_event event{};
+
+    event.data.fd = connection.fd;
+
+    event.events = EPOLLIN;
+
+    if (!connection.writeBuffer.empty())
+    {
+        event.events |= EPOLLOUT;
+    }
+
+    return epoll_ctl(
+        epollFd,
+        EPOLL_CTL_MOD,
+        connection.fd,
+        &event
+    ) != -1;
+}
+
+void broadcast(
+    int epollFd,
+    std::unordered_map<int, Connection>& connections,
+    int senderFd,
+    const std::string& message
+)
+{
+    for (auto& [fd, connection] : connections)
+    {
+        if (fd == senderFd)
+        {
+            continue;
+        }
+
+        connection.writeBuffer += message;
+
+        updateEvents(
+            epollFd,
+            connection
+        );
+    }
+}
+
+bool flushWriteBuffer(
+    int epollFd,
+    Connection& connection
+)
+{
+    while (!connection.writeBuffer.empty())
+    {
+        ssize_t sent = send(
+            connection.fd,
+            connection.writeBuffer.data(),
+            connection.writeBuffer.size(),
+            MSG_NOSIGNAL
+        );
+
+        if (sent > 0)
+        {
+            connection.writeBuffer.erase(
+                0,
+                static_cast<std::size_t>(sent)
+            );
+
+            continue;
+        }
+
+        if (sent == -1 &&
+            (
+                errno == EAGAIN ||
+                errno == EWOULDBLOCK
+            ))
+        {
+            break;
+        }
+
+        return false;
+    }
+
+    return updateEvents(
+        epollFd,
+        connection
+    );
+}
+
+std::vector<std::string> extractLines(
+    std::string& buffer
+)
+{
+    std::vector<std::string> lines;
+
+    while (true)
+    {
+        std::size_t position =
+            buffer.find('\n');
+
+        if (position == std::string::npos)
+        {
+            break;
+        }
+
+        std::string line =
+            buffer.substr(
+                0,
+                position
+            );
+
+        buffer.erase(
+            0,
+            position + 1
+        );
+
+        if (!line.empty() &&
+            line.back() == '\r')
+        {
+            line.pop_back();
+        }
+
+        lines.push_back(
+            std::move(line)
+        );
+    }
+
+    return lines;
+}
+
+void handleLine(
+    int epollFd,
+    std::unordered_map<int, Connection>& connections,
+    Connection& connection,
+    const std::string& line
+)
+{
+    if (!connection.registered)
+    {
+        const std::string prefix =
+            "NICK ";
+
+        if (
+            line.rfind(
+                prefix,
+                0
+            ) != 0
+        )
+        {
+            connection.writeBuffer +=
+                "ERROR first command must be NICK\n";
+
+            updateEvents(
+                epollFd,
+                connection
+            );
+
+            return;
+        }
+
+        std::string nickname =
+            line.substr(
+                prefix.size()
+            );
+
+        if (nickname.empty())
+        {
+            connection.writeBuffer +=
+                "ERROR empty nickname\n";
+
+            updateEvents(
+                epollFd,
+                connection
+            );
+
+            return;
+        }
+
+        connection.nickname =
+            std::move(nickname);
+
+        connection.registered = true;
+
+        connection.writeBuffer +=
+            "Welcome "
+            + connection.nickname
+            + "\n";
+
+        updateEvents(
+            epollFd,
+            connection
+        );
+
+        broadcast(
+            epollFd,
+            connections,
+            connection.fd,
+            "*** "
+                + connection.nickname
+                + " joined ***\n"
+        );
+
+        return;
+    }
+
+    if (line == "/quit")
+    {
+        return;
+    }
+
+    if (line.empty())
+    {
+        return;
+    }
+
+    broadcast(
+        epollFd,
+        connections,
+        connection.fd,
+        "["
+            + connection.nickname
+            + "] "
+            + line
+            + "\n"
+    );
+}
+
+bool handleRead(
+    int epollFd,
+    std::unordered_map<int, Connection>& connections,
+    Connection& connection
+)
+{
+    char buffer[4096];
+
+    while (true)
+    {
+        ssize_t received = recv(
+            connection.fd,
+            buffer,
+            sizeof(buffer),
+            0
+        );
+
+        if (received > 0)
+        {
+            connection.readBuffer.append(
+                buffer,
+                static_cast<std::size_t>(
+                    received
+                )
+            );
+
+            auto lines =
+                extractLines(
+                    connection.readBuffer
+                );
+
+            for (const auto& line : lines)
+            {
+                if (
+                    connection.registered &&
+                    line == "/quit"
+                )
+                {
+                    return false;
+                }
+
+                handleLine(
+                    epollFd,
+                    connections,
+                    connection,
+                    line
+                );
+            }
+
+            continue;
+        }
+
+        if (received == 0)
+        {
+            return false;
+        }
+
+        if (
+            errno == EAGAIN ||
+            errno == EWOULDBLOCK
+        )
+        {
+            return true;
+        }
+
+        return false;
+    }
+}
+
+void removeConnection(
+    int epollFd,
+    std::unordered_map<int, Connection>& connections,
+    int fd
+)
+{
+    auto it =
+        connections.find(fd);
+
+    if (it == connections.end())
+    {
+        return;
+    }
+
+    std::string nickname =
+        it->second.nickname;
+
+    bool wasRegistered =
+        it->second.registered;
+
+    epoll_ctl(
+        epollFd,
+        EPOLL_CTL_DEL,
+        fd,
+        nullptr
+    );
+
+    close(fd);
+
+    connections.erase(it);
+
+    if (wasRegistered)
+    {
+        broadcast(
+            epollFd,
+            connections,
+            -1,
+            "*** "
+                + nickname
+                + " left ***\n"
+        );
+    }
 }
 
 int main()
@@ -57,9 +402,12 @@ int main()
 
     sockaddr_in address{};
 
-    address.sin_family = AF_INET;
+    address.sin_family =
+        AF_INET;
+
     address.sin_addr.s_addr =
         htonl(INADDR_ANY);
+
     address.sin_port =
         htons(8080);
 
@@ -79,6 +427,7 @@ int main()
             << '\n';
 
         close(serverFd);
+
         return 1;
     }
 
@@ -89,34 +438,25 @@ int main()
         ) == -1
     )
     {
-        std::cerr
-            << "listen failed: "
-            << std::strerror(errno)
-            << '\n';
-
         close(serverFd);
+
         return 1;
     }
 
     if (!setNonBlocking(serverFd))
     {
-        std::cerr
-            << "failed to set server socket non-blocking\n";
-
         close(serverFd);
+
         return 1;
     }
 
-    int epollFd = epoll_create1(0);
+    int epollFd =
+        epoll_create1(0);
 
     if (epollFd == -1)
     {
-        std::cerr
-            << "epoll_create1 failed: "
-            << std::strerror(errno)
-            << '\n';
-
         close(serverFd);
+
         return 1;
     }
 
@@ -137,68 +477,73 @@ int main()
         ) == -1
     )
     {
-        std::cerr
-            << "epoll_ctl failed: "
-            << std::strerror(errno)
-            << '\n';
-
         close(epollFd);
         close(serverFd);
 
         return 1;
     }
 
+    std::unordered_map<
+        int,
+        Connection
+    > connections;
+
     constexpr int MaxEvents = 64;
 
     epoll_event events[MaxEvents];
 
     std::cout
-        << "epoll server listening on port 8080\n";
+        << "Chat server listening on port 8080\n";
 
     while (true)
     {
-        int eventCount =
-            epoll_wait(
-                epollFd,
-                events,
-                MaxEvents,
-                -1
-            );
+        int count = epoll_wait(
+            epollFd,
+            events,
+            MaxEvents,
+            -1
+        );
 
-        if (eventCount == -1)
+        if (count == -1)
         {
             if (errno == EINTR)
             {
                 continue;
             }
 
-            std::cerr
-                << "epoll_wait failed: "
-                << std::strerror(errno)
-                << '\n';
-
             break;
         }
 
         for (int i = 0;
-             i < eventCount;
+             i < count;
              ++i)
         {
             int fd =
                 events[i].data.fd;
 
-            std::uint32_t currentEvents =
+            std::uint32_t eventMask =
                 events[i].events;
 
             if (fd == serverFd)
             {
                 while (true)
                 {
+                    sockaddr_in clientAddress{};
+
+                    socklen_t clientLength =
+                        sizeof(
+                            clientAddress
+                        );
+
                     int clientFd =
                         accept(
                             serverFd,
-                            nullptr,
-                            nullptr
+                            reinterpret_cast<
+                                sockaddr*
+                            >(
+                                &clientAddress
+                            ),
+                            &clientLength
                         );
 
                     if (clientFd >= 0)
@@ -210,15 +555,16 @@ int main()
                         )
                         {
                             close(clientFd);
+
                             continue;
                         }
 
-                        epoll_event clientEvent{};
+                        epoll_event event{};
 
-                        clientEvent.events =
+                        event.events =
                             EPOLLIN;
 
-                        clientEvent.data.fd =
+                        event.data.fd =
                             clientFd;
 
                         if (
@@ -226,16 +572,27 @@ int main()
                                 epollFd,
                                 EPOLL_CTL_ADD,
                                 clientFd,
-                                &clientEvent
+                                &event
                             ) == -1
                         )
                         {
                             close(clientFd);
+
                             continue;
                         }
 
+                        Connection connection;
+
+                        connection.fd =
+                            clientFd;
+
+                        connections.emplace(
+                            clientFd,
+                            std::move(connection)
+                        );
+
                         std::cout
-                            << "Client connected, fd="
+                            << "Connected fd="
                             << clientFd
                             << '\n';
 
@@ -250,121 +607,85 @@ int main()
                         break;
                     }
 
-                    std::cerr
-                        << "accept failed: "
-                        << std::strerror(errno)
-                        << '\n';
-
                     break;
                 }
 
                 continue;
             }
 
+            auto it =
+                connections.find(fd);
+
             if (
-                currentEvents
+                it ==
+                connections.end()
+            )
+            {
+                continue;
+            }
+
+            bool keep =
+                true;
+
+            if (
+                eventMask
                 & (
                     EPOLLERR |
                     EPOLLHUP
                 )
             )
             {
-                epoll_ctl(
-                    epollFd,
-                    EPOLL_CTL_DEL,
-                    fd,
-                    nullptr
-                );
-
-                close(fd);
-
-                continue;
+                keep = false;
             }
 
             if (
-                currentEvents
-                & EPOLLIN
+                keep &&
+                (
+                    eventMask
+                    & EPOLLIN
+                )
             )
             {
-                bool disconnected = false;
+                keep = handleRead(
+                    epollFd,
+                    connections,
+                    it->second
+                );
+            }
 
-                while (true)
-                {
-                    char buffer[4096];
-
-                    ssize_t received =
-                        recv(
-                            fd,
-                            buffer,
-                            sizeof(buffer),
-                            0
-                        );
-
-                    if (received > 0)
-                    {
-                        // 教学版 echo：
-                        // 暂时直接 send。
-                        ssize_t sent =
-                            send(
-                                fd,
-                                buffer,
-                                static_cast<
-                                    std::size_t
-                                >(received),
-                                MSG_NOSIGNAL
-                            );
-
-                        if (sent < 0)
-                        {
-                            if (
-                                errno != EAGAIN &&
-                                errno != EWOULDBLOCK
-                            )
-                            {
-                                disconnected =
-                                    true;
-                            }
-                        }
-
-                        continue;
-                    }
-
-                    if (received == 0)
-                    {
-                        disconnected = true;
-                        break;
-                    }
-
-                    if (
-                        errno == EAGAIN ||
-                        errno == EWOULDBLOCK
-                    )
-                    {
-                        break;
-                    }
-
-                    disconnected = true;
-                    break;
-                }
-
-                if (disconnected)
-                {
-                    std::cout
-                        << "Client disconnected, fd="
-                        << fd
-                        << '\n';
-
-                    epoll_ctl(
+            if (
+                keep &&
+                (
+                    eventMask
+                    & EPOLLOUT
+                )
+            )
+            {
+                keep =
+                    flushWriteBuffer(
                         epollFd,
-                        EPOLL_CTL_DEL,
-                        fd,
-                        nullptr
+                        it->second
                     );
+            }
 
-                    close(fd);
-                }
+            if (!keep)
+            {
+                removeConnection(
+                    epollFd,
+                    connections,
+                    fd
+                );
             }
         }
+    }
+
+    for (
+        auto& [fd, connection] :
+        connections
+    )
+    {
+        (void)connection;
+        close(fd);
     }
 
     close(epollFd);
