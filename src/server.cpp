@@ -1,80 +1,30 @@
 #include <arpa/inet.h>
-#include <sys/socket.h>
-
-#include <iostream>
-#include <cstring>
 #include <cerrno>
+#include <cstring>
+#include <fcntl.h>
+#include <iostream>
+#include <sys/socket.h>
 #include <unistd.h>
-#include <thread>
+#include <vector>
 
-bool sendAll(
-    int fd,
-    const char* data,
-    std::size_t size
-)
+bool setNonBlocking(int fd)
 {
-    std::size_t total = 0;
+    int flags = fcntl(
+        fd,
+        F_GETFL,
+        0
+    );
 
-    while (total < size)
+    if (flags == -1)
     {
-        ssize_t sent = send(
-            fd,
-            data + total,
-            size - total,
-            0
-        );
-
-        if (sent == -1)
-        {
-            std::cerr
-                << "send failed: "
-                << std::strerror(errno)
-                << '\n';
-
-            return false;
-        }
-
-        total += sent;
+        return false;
     }
-    return true;
-}
 
-void handleClient(int clinetFd)
-{
-    char buffer[4096];
-
-
-    while (true)
-    {
-        ssize_t received = recv(
-            clinetFd,
-            buffer,
-            sizeof(buffer),
-            0
-        );
-
-        if (received == -1)
-        {
-            std::cerr
-                << "recv failed: "
-                << std::strerror(errno)
-                << '\n';
-
-            break;
-        }
-        else if (received == 0)
-        {
-            std::cout
-                << "client disconnected\n";
-
-            break;
-        }
-
-        if (!sendAll(clinetFd, buffer, received))
-        {
-            break;
-        }
-    }
+    return fcntl(
+        fd,
+        F_SETFL,
+        flags | O_NONBLOCK
+    ) != -1;
 }
 
 int main()
@@ -105,21 +55,21 @@ int main()
         sizeof(option)
     );
 
-    sockaddr_in serverAddress{};
+    sockaddr_in address{};
 
-    serverAddress.sin_family =
-        AF_INET;
-    serverAddress.sin_port =
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr =
+        htonl(INADDR_ANY);
+    address.sin_port =
         htons(8080);
-    serverAddress.sin_addr.s_addr =
-        INADDR_ANY;
+
     if (
         bind(
             serverFd,
             reinterpret_cast<sockaddr*>(
-                &serverAddress
+                &address
             ),
-            sizeof(serverAddress)
+            sizeof(address)
         ) == -1
     )
     {
@@ -133,71 +83,137 @@ int main()
     }
 
     if (
-        listen(
-            serverFd,
-            SOMAXCONN
-        ) == -1
+        listen(serverFd, 128)
+        == -1
     )
     {
         std::cerr
-            << "listen failed: "
-            << std::strerror(errno)
-            << '\n';
+            << "listen failed\n";
 
         close(serverFd);
         return 1;
     }
 
+    if (!setNonBlocking(serverFd))
+    {
+        std::cerr
+            << "failed to set server nonblocking\n";
+
+        close(serverFd);
+        return 1;
+    }
+
+    std::vector<int> clients;
+
     std::cout
-        << "server listening on port 8080\n";
+        << "Non-blocking server listening on 8080\n";
 
     while (true)
     {
-        sockaddr_in clientAddress{};
-        socklen_t clientAddressSize =
-            sizeof(clientAddress);
-
-        int clientFd = accept(
-            serverFd,
-            reinterpret_cast<sockaddr*>(
-                &clientAddress
-            ),
-            &clientAddressSize
-        );
-
-        if (clientFd == -1)
+        // 1. 尽量 accept 新连接
+        while (true)
         {
+            int clientFd = accept(
+                serverFd,
+                nullptr,
+                nullptr
+            );
+
+            if (clientFd >= 0)
+            {
+                if (!setNonBlocking(clientFd))
+                {
+                    close(clientFd);
+                    continue;
+                }
+
+                clients.push_back(
+                    clientFd
+                );
+
+                std::cout
+                    << "Client connected, fd="
+                    << clientFd
+                    << '\n';
+
+                continue;
+            }
+
+            if (
+                errno == EAGAIN ||
+                errno == EWOULDBLOCK
+            )
+            {
+                break;
+            }
+
             std::cerr
                 << "accept failed: "
                 << std::strerror(errno)
                 << '\n';
 
-            continue;
+            break;
         }
 
-        char ip[INET_ADDRSTRLEN];
+        // 2. 检查每一个 client
+        for (auto it = clients.begin();
+             it != clients.end();)
+        {
+            int clientFd = *it;
 
-        inet_ntop(
-            AF_INET,
-            &clientAddress.sin_addr,
-            ip,
-            sizeof(ip)
-        );
+            char buffer[4096];
 
-        std::cout
-            << "Client connected: "
-            << ip
-            << ':'
-            << ntohs(clientAddress.sin_port)
-            << '\n';
+            ssize_t received =
+                recv(
+                    clientFd,
+                    buffer,
+                    sizeof(buffer),
+                    0
+                );
 
-        std::thread(
-            handleClient,
-            clientFd
-        ).detach();
+            if (received > 0)
+            {
+                std::cout
+                    << "fd "
+                    << clientFd
+                    << " received "
+                    << received
+                    << " bytes\n";
+
+                ++it;
+            }
+            else if (received == 0)
+            {
+                std::cout
+                    << "Client disconnected, fd="
+                    << clientFd
+                    << '\n';
+
+                close(clientFd);
+
+                it = clients.erase(it);
+            }
+            else if (
+                errno == EAGAIN ||
+                errno == EWOULDBLOCK
+            )
+            {
+                // 没数据，正常情况
+                ++it;
+            }
+            else
+            {
+                std::cerr
+                    << "recv error on fd "
+                    << clientFd
+                    << ": "
+                    << std::strerror(errno)
+                    << '\n';
+
+                close(clientFd);
+
+                it = clients.erase(it);
+            }
+        }
     }
-
-    close(serverFd);
-    return 0;
-    
 }
