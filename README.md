@@ -1,153 +1,221 @@
-# C++17 Thread Pool
+# CppHttpServer
 
-A small but practical C++17 thread pool implemented from scratch for learning modern C++ concurrency and resource-management techniques.
+A lightweight HTTP/1.0 and HTTP/1.1 server written in C++17 for Linux.
 
-The project demonstrates:
+The project was built from first principles to demonstrate TCP networking, non-blocking I/O, `epoll`, HTTP parsing, routing, static file serving, thread pools, persistent connections, resource limits, error handling, and concurrent server architecture.
 
-- Worker-thread reuse
-- Thread-safe task queuing
-- `std::mutex`
-- `std::condition_variable`
-- RAII-based thread lifetime management
-- `std::future`
-- `std::packaged_task`
-- Perfect forwarding
-- Exception propagation
-- Graceful shutdown
-- Atomic statistics
-- Unit testing
-- Sanitizers
-- Basic benchmarking
+## Features
+
+- Linux non-blocking TCP sockets
+- `epoll` event loop
+- Worker thread pool
+- `eventfd`-based worker-to-event-loop notification
+- Incremental HTTP request parsing
+- HTTP/1.0 and HTTP/1.1
+- `Content-Length` request bodies
+- HTTP Keep-Alive
+- Idle connection timeout
+- Maximum requests per connection
+- Dynamic routing
+- Static file serving
+- MIME type detection
+- Path traversal protection
+- Partial read/write handling
+- Request and response buffering
+- Bounded worker task queue
 - Thread-safe logging
+- Access logging
+- HTTP error responses
+- GoogleTest/CTest support
+- ASan/UBSan support
 
 ## Architecture
 
-The core execution model is:
+```text
+                     Clients
+                        |
+                        v
+                  +-----------+
+                  |   epoll   |
+                  | EventLoop |
+                  +-----+-----+
+                        |
+             +----------+----------+
+             |                     |
+           recv                  EPOLLOUT
+             |
+             v
+       readBuffer
+             |
+             v
+    HttpRequestParser
+             |
+             v
+       HttpRequest
+             |
+             v
+       ThreadPool
+      /          \
+ Router       Static Files
+      \          /
+       HttpResponse
+             |
+             v
+     CompletionQueue
+             |
+          eventfd
+             |
+             v
+       Event Loop
+             |
+             v
+       writeBuffer
+             |
+             v
+           send
+```
+
+The event-loop thread owns socket and connection state.
+
+Worker threads do not call `recv()`, `send()`, `close()`, or `epoll_ctl()`. They transform an `HttpRequest` into an `HttpResponse` and return the result through the completion queue.
+
+## Supported Endpoints
+
+### GET `/hello`
+
+Returns a simple dynamically generated response.
+
+```bash
+curl -v http://127.0.0.1:8080/hello
+```
+
+### GET `/health`
+
+Health endpoint.
+
+```bash
+curl -v http://127.0.0.1:8080/health
+```
+
+Example body:
+
+```json
+{"status":"ok"}
+```
+
+### POST `/echo`
+
+Returns the request body.
+
+```bash
+curl \
+    -v \
+    -X POST \
+    --data 'hello' \
+    http://127.0.0.1:8080/echo
+```
+
+### Static Files
+
+Files are served from the `www/` directory.
 
 ```text
-                submit()
-                   |
-                   v
-        +----------------------+
-        |      Task Queue      |
-        | std::function<void()>|
-        +----------------------+
-                   |
-         mutex + condition
-                   |
-        +----------+----------+
-        |          |          |
-        v          v          v
-     Worker 1   Worker 2   Worker N
-        |          |          |
-        +------ execute -------+
+GET /
+    -> www/index.html
+
+GET /style.css
+    -> www/style.css
 ```
 
-Worker threads are created when the `ThreadPool` is constructed and are reused for multiple tasks.
+Example:
 
-Workers sleep on a `std::condition_variable` when no work is available instead of busy waiting.
-
-## Task Submission
-
-Tasks may return values:
-
-```cpp
-ThreadPool pool(4);
-
-auto result = pool.submit(
-    [](int a, int b)
-    {
-        return a + b;
-    },
-    10,
-    20
-);
-
-std::cout << result.get() << '\n';
+```bash
+curl -v http://127.0.0.1:8080/
 ```
 
-Output:
+## HTTP Parsing
+
+Requests are parsed incrementally.
+
+The server does not assume that one TCP `recv()` corresponds to one HTTP request.
 
 ```text
-30
+TCP bytes
+    |
+    v
+readBuffer
+    |
+    +-- incomplete header
+    |       -> NeedMoreData
+    |
+    +-- incomplete body
+    |       -> NeedMoreData
+    |
+    +-- invalid request
+    |       -> Error
+    |
+    +-- complete request
+            -> HttpRequest
 ```
 
-`submit()` automatically returns:
+The current implementation supports request bodies framed with `Content-Length`.
 
-```cpp
-std::future<ReturnType>
-```
+`Transfer-Encoding: chunked` is intentionally not supported.
 
-where `ReturnType` is inferred from the submitted callable.
+## Error Handling
 
-## Exception Propagation
+The server can return responses including:
 
-Exceptions thrown by tasks are propagated through their futures:
+| Status | Meaning |
+|---:|---|
+| 200 | OK |
+| 400 | Bad Request |
+| 404 | Not Found |
+| 405 | Method Not Allowed |
+| 413 | Payload Too Large |
+| 431 | Request Header Fields Too Large |
+| 500 | Internal Server Error |
+| 503 | Service Unavailable |
 
-```cpp
-auto future = pool.submit(
-    []() -> int
-    {
-        throw std::runtime_error("task failed");
-    }
-);
+Malformed HTTP framing causes the connection to be closed after the error response.
 
-try
-{
-    future.get();
-}
-catch (const std::exception& error)
-{
-    std::cerr << error.what() << '\n';
-}
-```
+Internal exception details are written to the server log rather than exposed to clients.
 
-A failed task does not terminate the entire thread pool.
+## Keep-Alive
 
-## Shutdown
-
-The pool performs graceful shutdown.
-
-The lifecycle is:
+HTTP/1.1 connections are persistent by default.
 
 ```text
-Running
-   |
-   | shutdown()
-   v
-Stopping
-   |
-   | reject new submissions
-   | execute already queued tasks
-   v
-Queue empty
-   |
-   v
-Workers exit
-   |
-   v
-Joined / stopped
+HTTP/1.1
+Connection absent
+    -> keep alive
+
+Connection: close
+    -> close after response
 ```
 
-Once shutdown begins:
+HTTP/1.0 connections close by default unless `Connection: keep-alive` is supplied.
 
-- New tasks are rejected.
-- Already submitted tasks continue running.
-- Workers exit only when the queue becomes empty.
-- All worker threads are joined.
+The server also applies resource limits:
 
-The destructor automatically performs shutdown, following RAII principles.
+```text
+Idle timeout:
+60 seconds
 
-## Requirements
+Maximum requests per TCP connection:
+100
+```
 
-- C++17-compatible compiler
-- CMake 3.16 or later
-- POSIX threads / supported C++ threading implementation
-- Git
-
-GoogleTest is downloaded automatically when tests are enabled.
+These values are implementation policy rather than HTTP protocol requirements.
 
 ## Build
+
+Requirements:
+
+- Linux
+- C++17-compatible GCC or Clang
+- CMake 3.18 or later
+- POSIX threads
 
 Debug build:
 
@@ -160,13 +228,46 @@ cmake \
 cmake --build build --parallel
 ```
 
-Run the demo:
+Release build:
 
 ```bash
-./build/thread_pool_demo
+cmake \
+    -S . \
+    -B build-release \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_TESTING=OFF
+
+cmake --build \
+    build-release \
+    --parallel
+```
+
+## Run
+
+Run the server from the project root so the relative `www/` document root resolves correctly:
+
+```bash
+./build-release/http_server
+```
+
+Default listening address:
+
+```text
+0.0.0.0:8080
 ```
 
 ## Tests
+
+Build with testing enabled:
+
+```bash
+cmake \
+    -S . \
+    -B build \
+    -DCMAKE_BUILD_TYPE=Debug
+
+cmake --build build --parallel
+```
 
 Run:
 
@@ -176,150 +277,139 @@ ctest \
     --output-on-failure
 ```
 
-The test suite covers areas including:
+Tests cover HTTP request parsing, response serialization, routing, and static file handling.
 
-- Returning task results
-- Argument forwarding
-- Multiple return types
-- Future-based exception propagation
-- Worker survival after task failure
-- Graceful shutdown
-- Rejecting submissions after shutdown
-- Concurrent execution
-
-## AddressSanitizer / UndefinedBehaviorSanitizer
-
-Create a separate sanitizer build:
+## Sanitizers
 
 ```bash
 cmake \
     -S . \
     -B build-sanitize \
     -DCMAKE_BUILD_TYPE=Debug \
-    -DENABLE_ASAN_UBSAN=ON
+    -DENABLE_SANITIZERS=ON
 
-cmake --build build-sanitize --parallel
+cmake --build \
+    build-sanitize \
+    --parallel
 
 ctest \
     --test-dir build-sanitize \
     --output-on-failure
 ```
 
-## ThreadSanitizer
+## Benchmarking
 
-ThreadSanitizer is built separately from ASan/UBSan:
+Performance tests should use a Release build.
 
-```bash
-cmake \
-    -S . \
-    -B build-tsan \
-    -DCMAKE_BUILD_TYPE=Debug \
-    -DENABLE_TSAN=ON
-
-cmake --build build-tsan --parallel
-
-ctest \
-    --test-dir build-tsan \
-    --output-on-failure
-```
-
-TSan is used to detect data races in concurrent code.
-
-Some Linux or WSL configurations may have ThreadSanitizer runtime/address-space compatibility issues unrelated to the thread-pool implementation.
-
-## Benchmark
-
-The included benchmark compares serial execution with the thread pool.
-
-Always use a Release build for performance measurements:
+Warm up the server before recording results:
 
 ```bash
-cmake \
-    -S . \
-    -B build-release \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DBUILD_TESTS=OFF
-
-cmake --build build-release --parallel
-
-./build-release/thread_pool_benchmark
+wrk \
+    -t2 \
+    -c32 \
+    -d10s \
+    http://127.0.0.1:8080/health
 ```
 
-The benchmark validates that serial and parallel executions produce the same result before reporting timing information.
+Example GET benchmark:
 
-Benchmark results are intended for rough trend comparison rather than rigorous microbenchmarking.
+```bash
+wrk \
+    -t4 \
+    -c64 \
+    -d30s \
+    --latency \
+    http://127.0.0.1:8080/health
+```
 
-Do not benchmark with sanitizers or verbose logging enabled.
+Static-file benchmark:
 
-## Logging
+```bash
+wrk \
+    -t4 \
+    -c64 \
+    -d30s \
+    --latency \
+    http://127.0.0.1:8080/
+```
 
-The project includes a small thread-safe logger for observing events such as:
+Keep-Alive can also be tested with ApacheBench:
 
-- Worker startup
-- Worker shutdown
-- Pool shutdown
-- Task lifecycle information
+```bash
+ab \
+    -k \
+    -n 10000 \
+    -c 50 \
+    http://127.0.0.1:8080/health
+```
 
-Logging is synchronized to avoid interleaved output from multiple threads.
+Benchmark results are machine- and configuration-dependent and should therefore be recorded together with build mode, CPU, concurrency, logging configuration, endpoint, duration, and error count.
 
-Verbose logging should be disabled during performance measurements.
+### Benchmark Results
 
-## Project Structure
+| Endpoint | Threads | Connections | Duration | Requests/sec | P99 | Errors |
+|---|---:|---:|---:|---:|---:|---:|
+| `/health` | 1 | 1 | 30s | TBD | TBD | TBD |
+| `/health` | 4 | 16 | 30s | TBD | TBD | TBD |
+| `/health` | 4 | 64 | 30s | TBD | TBD | TBD |
+| `/health` | 4 | 128 | 30s | TBD | TBD | TBD |
+| `/` | 4 | 64 | 30s | TBD | TBD | TBD |
+| `POST /echo` | 4 | 64 | 30s | TBD | TBD | TBD |
+
+Do not treat Debug-build results as representative performance numbers.
+
+Per-request access logging also affects throughput and latency, so benchmark reports should state whether access logging was enabled.
+
+## Current Limits
+
+This is an educational HTTP server rather than a production replacement for nginx, Apache HTTP Server, or a mature application server.
+
+Current limitations include:
+
+- Linux only
+- HTTP/2 is not supported
+- HTTP/3 is not supported
+- TLS/HTTPS is not implemented
+- `Transfer-Encoding: chunked` is not implemented
+- Request pipelining is processed sequentially per connection
+- No URL percent-decoding layer
+- Static file handling is intentionally simple
+- No file cache
+- No zero-copy `sendfile()`
+- No graceful signal-based shutdown yet
+- No production-grade structured logging or log rotation
+
+## Design Principles
+
+The project intentionally separates responsibilities:
 
 ```text
-thread-pool/
-├── .github/
-│   └── workflows/
-│       └── ci.yml
-├── benchmark/
-│   └── thread_pool_benchmark.cpp
-├── include/
-│   ├── logger.h
-│   └── thread_pool.h
-├── src/
-│   ├── main.cpp
-│   └── thread_pool.cpp
-├── tests/
-│   └── thread_pool_test.cpp
-├── .clang-format
-├── .clang-tidy
-├── .gitignore
-├── CMakeLists.txt
-└── README.md
+epoll/Event Loop
+    -> network I/O and connection ownership
+
+HttpRequestParser
+    -> protocol parsing
+
+Router
+    -> dynamic route selection
+
+StaticFileHandler
+    -> static resource handling
+
+ThreadPool
+    -> controlled business concurrency
+
+CompletionQueue + eventfd
+    -> worker-to-event-loop communication
+
+HttpResponse serializer
+    -> response wire format
 ```
 
-## Design Notes
+The central concurrency rule is:
 
-The queue stores:
+> The event-loop thread owns sockets and connection state. Worker threads process request-to-response work without directly manipulating socket lifetime.
 
-```cpp
-std::function<void()>
-```
+## License
 
-Submitted functions and their arguments are wrapped in `std::packaged_task`, allowing task return values and exceptions to be transferred through `std::future`.
-
-In the C++17 implementation, a `std::shared_ptr<std::packaged_task<...>>` is used to adapt the move-only packaged task to the copyable callable requirements of `std::function`.
-
-Shared queue state is protected with a mutex.
-
-Simple independent statistics may use `std::atomic`.
-
-Atomic variables are not used as a replacement for mutexes when multiple pieces of state must remain consistent.
-
-## Current Limitations
-
-This is intentionally a compact educational thread pool.
-
-It currently does not implement:
-
-- Task priorities
-- Work stealing
-- Dynamic worker resizing
-- Task cancellation
-- Bounded queues / backpressure
-- CPU affinity
-- Coroutine integration
-- Dependency graphs
-- Production-grade scheduling policies
-
-These features are intentionally outside the scope of the first stable release.
+Add the license appropriate for your repository.
