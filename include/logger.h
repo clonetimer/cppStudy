@@ -1,74 +1,44 @@
 #ifndef LOGGER_H
 #define LOGGER_H
 
-#include <iostream>
-#include <mutex>
 #include <string_view>
-#include <thread>
 
 enum class LogLevel
 {
     Debug,
     Info,
+    Warning,
     Error
 };
 
 class Logger
 {
 public:
-    static void setEnabled(bool enabled)
-    {
-        std::lock_guard<std::mutex> lock(
-            mutex_);
-
-        enabled_ = enabled;
-    }
-
     static void log(
         LogLevel level,
-        std::string_view message)
-    {
-        std::lock_guard<std::mutex> lock(
-            mutex_);
+        std::string_view message
+    );
 
-        if (!enabled_)
-        {
-            return;
-        }
+    static void debug(
+        std::string_view message
+    );
 
-        std::cerr
-            << '['
-            << levelName(level)
-            << "] [thread "
-            << std::this_thread::get_id()
-            << "] "
-            << message
-            << '\n';
-    }
+    static void info(
+        std::string_view message
+    );
+
+    static void warning(
+        std::string_view message
+    );
+
+    static void error(
+        std::string_view message
+    );
 
 private:
     static const char* levelName(
-        LogLevel level)
-    {
-        switch (level)
-        {
-        case LogLevel::Debug:
-            return "DEBUG";
-
-        case LogLevel::Info:
-            return "INFO";
-
-        case LogLevel::Error:
-            return "ERROR";
-        }
-
-        return "UNKNOWN";
-    }
-
-private:
-    inline static std::mutex mutex_;
-
-    inline static bool enabled_ = true;
+        LogLevel level
+    );
 };
 
 #endif

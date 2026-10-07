@@ -3,6 +3,7 @@
 #include "http_request.h"
 #include "http_request_parser.h"
 #include "http_response.h"
+#include "logger.h"
 #include "router.h"
 #include "static_file_handler.h"
 #include "thread_pool.h"
@@ -11,10 +12,11 @@
 #include <algorithm>
 #include <arpa/inet.h>
 #include <cerrno>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <fcntl.h>
-#include <iostream>
 #include <string>
 #include <string_view>
 #include <sys/epoll.h>
@@ -24,6 +26,7 @@
 #include <unordered_map>
 #include <unistd.h>
 #include <utility>
+#include <vector>
 
 namespace
 {
@@ -39,6 +42,17 @@ constexpr std::size_t
 constexpr std::size_t
     MaxPendingTasks =
         1024;
+
+constexpr std::size_t
+    MaxRequestsPerConnection =
+        100;
+
+constexpr std::chrono::seconds
+    IdleTimeout{60};
+
+constexpr int
+    EpollWaitTimeoutMs =
+        1000;
 
 struct HttpTask
 {
@@ -89,7 +103,8 @@ std::string toLower(
         {
             result.push_back(
                 static_cast<char>(
-                    ch - 'A' + 'a'
+                    ch - 'A'
+                    + 'a'
                 )
             );
         }
@@ -100,6 +115,112 @@ std::string toLower(
     }
 
     return result;
+}
+
+std::string trimAscii(
+    std::string_view value
+)
+{
+    std::size_t begin = 0;
+
+    while (
+        begin < value.size()
+        &&
+        (
+            value[begin] == ' '
+            ||
+            value[begin] == '\t'
+        )
+    )
+    {
+        ++begin;
+    }
+
+    std::size_t end =
+        value.size();
+
+    while (
+        end > begin
+        &&
+        (
+            value[end - 1] == ' '
+            ||
+            value[end - 1] == '\t'
+        )
+    )
+    {
+        --end;
+    }
+
+    return std::string(
+        value.substr(
+            begin,
+            end - begin
+        )
+    );
+}
+
+bool headerContainsToken(
+    std::string_view value,
+    std::string_view token
+)
+{
+    const std::string lowerValue =
+        toLower(value);
+
+    const std::string lowerToken =
+        toLower(token);
+
+    std::size_t begin = 0;
+
+    while (
+        begin <=
+        lowerValue.size()
+    )
+    {
+        const std::size_t comma =
+            lowerValue.find(
+                ',',
+                begin
+            );
+
+        const std::size_t end =
+            comma ==
+                std::string::npos
+            ? lowerValue.size()
+            : comma;
+
+        const std::string current =
+            trimAscii(
+                std::string_view(
+                    lowerValue
+                ).substr(
+                    begin,
+                    end - begin
+                )
+            );
+
+        if (
+            current ==
+            lowerToken
+        )
+        {
+            return true;
+        }
+
+        if (
+            comma ==
+            std::string::npos
+        )
+        {
+            break;
+        }
+
+        begin =
+            comma + 1;
+    }
+
+    return false;
 }
 
 bool setNonBlocking(
@@ -150,6 +271,35 @@ HttpResponse makeTextResponse(
         std::move(body);
 
     return response;
+}
+
+std::string reasonPhraseForStatus(
+    int statusCode
+)
+{
+    switch (statusCode)
+    {
+        case 400:
+            return "Bad Request";
+
+        case 413:
+            return "Payload Too Large";
+
+        case 431:
+            return
+                "Request Header Fields Too Large";
+
+        case 500:
+            return
+                "Internal Server Error";
+
+        case 503:
+            return
+                "Service Unavailable";
+
+        default:
+            return "Bad Request";
+    }
 }
 
 std::string extractPath(
@@ -206,38 +356,69 @@ HttpResponse dispatchRequest(
     );
 }
 
+/*
+ * --------------------------------------------------
+ * HTTP keep-alive semantics
+ * --------------------------------------------------
+ */
+
 bool requestWantsClose(
     const HttpRequest& request
 )
 {
-    /*
-     * HTTP/1.0：
-     * D5 版本简单处理为默认关闭。
-     */
-    if (
-        request.version ==
-        "HTTP/1.0"
-    )
-    {
-        return true;
-    }
-
     const auto it =
         request.headers.find(
             "connection"
         );
 
     if (
-        it ==
-        request.headers.end()
+        request.version ==
+        "HTTP/1.1"
     )
     {
-        return false;
+        /*
+         * HTTP/1.1 默认 persistent。
+         */
+        if (
+            it ==
+            request.headers.end()
+        )
+        {
+            return false;
+        }
+
+        return headerContainsToken(
+            it->second,
+            "close"
+        );
     }
 
-    return toLower(
-        it->second
-    ) == "close";
+    if (
+        request.version ==
+        "HTTP/1.0"
+    )
+    {
+        /*
+         * HTTP/1.0 默认关闭。
+         *
+         * 只有明确 keep-alive
+         * 才保持连接。
+         */
+        if (
+            it ==
+            request.headers.end()
+        )
+        {
+            return true;
+        }
+
+        return !headerContainsToken(
+            it->second,
+            "keep-alive"
+        );
+    }
+
+    return true;
 }
 
 bool responseWantsClose(
@@ -254,14 +435,71 @@ bool responseWantsClose(
             == "connection"
         )
         {
-            return toLower(
-                value
-            ) == "close";
+            return headerContainsToken(
+                value,
+                "close"
+            );
         }
     }
 
     return false;
 }
+
+void eraseHeader(
+    HttpResponse& response,
+    std::string_view headerName
+)
+{
+    const std::string wanted =
+        toLower(headerName);
+
+    for (
+        auto it =
+            response.headers.begin();
+        it !=
+            response.headers.end();
+    )
+    {
+        if (
+            toLower(
+                it->first
+            ) == wanted
+        )
+        {
+            it =
+                response.headers.erase(
+                    it
+                );
+        }
+        else
+        {
+            ++it;
+        }
+    }
+}
+
+void setHeader(
+    HttpResponse& response,
+    std::string name,
+    std::string value
+)
+{
+    eraseHeader(
+        response,
+        name
+    );
+
+    response.headers[
+        std::move(name)
+    ] =
+        std::move(value);
+}
+
+/*
+ * --------------------------------------------------
+ * epoll connection management
+ * --------------------------------------------------
+ */
 
 bool updateConnectionEvents(
     int epollFd,
@@ -273,19 +511,18 @@ bool updateConnectionEvents(
     event.data.fd =
         connection.fd;
 
-    event.events =
-        EPOLLRDHUP;
+    event.events = 0;
 
-    /*
-     * 已经决定关闭以后，
-     * 不再读取新 HTTP Request。
-     */
     if (
         !connection.closeAfterWrite
+        &&
+        !connection.peerClosed
     )
     {
         event.events |=
-            EPOLLIN;
+            EPOLLIN
+            |
+            EPOLLRDHUP;
     }
 
     if (
@@ -324,6 +561,10 @@ void disconnectConnection(
         return;
     }
 
+    const std::uint64_t
+        connectionId =
+            it->second.id;
+
     epoll_ctl(
         epollFd,
         EPOLL_CTL_DEL,
@@ -333,14 +574,16 @@ void disconnectConnection(
 
     close(fd);
 
-    std::cout
-        << "Disconnected fd="
-        << fd
-        << " connectionId="
-        << it->second.id
-        << '\n';
-
     connections.erase(it);
+
+    Logger::info(
+        "client disconnected fd="
+        + std::to_string(fd)
+        + " connectionId="
+        + std::to_string(
+            connectionId
+        )
+    );
 }
 
 bool appendResponse(
@@ -366,6 +609,13 @@ bool appendResponse(
                 - serialized.size()
     )
     {
+        Logger::warning(
+            "write buffer limit exceeded fd="
+            + std::to_string(
+                connection.fd
+            )
+        );
+
         return false;
     }
 
@@ -383,6 +633,12 @@ bool appendResponse(
         connection
     );
 }
+
+/*
+ * --------------------------------------------------
+ * eventfd
+ * --------------------------------------------------
+ */
 
 void notifyEventLoop(
     int wakeFd
@@ -418,12 +674,6 @@ void notifyEventLoop(
             continue;
         }
 
-        /*
-         * EAGAIN 表示 eventfd counter 已经很大。
-         *
-         * 但这意味着 wakeFd 本身已经 readable，
-         * event loop 本来就会被唤醒，因此不需要重试。
-         */
         if (
             result == -1
             &&
@@ -492,6 +742,12 @@ void drainWakeFd(
     }
 }
 
+/*
+ * --------------------------------------------------
+ * socket read/write
+ * --------------------------------------------------
+ */
+
 ReadResult readFromConnection(
     Connection& connection
 )
@@ -510,6 +766,10 @@ ReadResult readFromConnection(
 
         if (received > 0)
         {
+            connection.lastActivity =
+                std::chrono::
+                    steady_clock::now();
+
             const auto size =
                 static_cast<std::size_t>(
                     received
@@ -525,13 +785,15 @@ ReadResult readFromConnection(
                         - size
             )
             {
-                std::cerr
-                    << "Read buffer limit exceeded "
-                    << "on fd="
-                    << connection.fd
-                    << '\n';
+                Logger::warning(
+                    "read buffer limit exceeded fd="
+                    + std::to_string(
+                        connection.fd
+                    )
+                );
 
-                return ReadResult::Error;
+                return
+                    ReadResult::Error;
             }
 
             connection.readBuffer.append(
@@ -544,7 +806,8 @@ ReadResult readFromConnection(
 
         if (received == 0)
         {
-            return ReadResult::PeerClosed;
+            return
+                ReadResult::PeerClosed;
         }
 
         if (errno == EINTR)
@@ -561,12 +824,14 @@ ReadResult readFromConnection(
             return ReadResult::Ok;
         }
 
-        std::cerr
-            << "recv failed on fd="
-            << connection.fd
-            << ": "
-            << std::strerror(errno)
-            << '\n';
+        Logger::error(
+            "recv failed fd="
+            + std::to_string(
+                connection.fd
+            )
+            + ": "
+            + std::strerror(errno)
+        );
 
         return ReadResult::Error;
     }
@@ -591,6 +856,10 @@ bool flushWriteBuffer(
 
         if (sent > 0)
         {
+            connection.lastActivity =
+                std::chrono::
+                    steady_clock::now();
+
             connection.writeBuffer.erase(
                 0,
                 static_cast<std::size_t>(
@@ -626,18 +895,20 @@ bool flushWriteBuffer(
             );
         }
 
-        std::cerr
-            << "send failed on fd="
-            << connection.fd
-            << ": "
-            << std::strerror(errno)
-            << '\n';
+        Logger::error(
+            "send failed fd="
+            + std::to_string(
+                connection.fd
+            )
+            + ": "
+            + std::strerror(errno)
+        );
 
         return false;
     }
 
     /*
-     * Response 已经全部发送完。
+     * 所有 Response 已发送完成。
      */
     if (
         connection.closeAfterWrite
@@ -653,11 +924,11 @@ bool flushWriteBuffer(
 }
 
 /*
- * 将一个完整 HTTP Request 投递到线程池。
- *
- * 返回 false：
- * connection 应立即断开。
+ * --------------------------------------------------
+ * Request → ThreadPool
+ * --------------------------------------------------
  */
+
 bool tryDispatchRequest(
     int epollFd,
     Connection& connection,
@@ -672,10 +943,6 @@ bool tryDispatchRequest(
     int wakeFd
 )
 {
-    /*
-     * 一个 connection 暂时最多
-     * 一个 in-flight request。
-     */
     if (
         connection.processing
         ||
@@ -690,6 +957,9 @@ bool tryDispatchRequest(
             connection.readBuffer
         );
 
+    /*
+     * TCP 数据还没完整。
+     */
     if (
         result.status ==
         ParseStatus::NeedMoreData
@@ -698,28 +968,55 @@ bool tryDispatchRequest(
         return true;
     }
 
+    /*
+     * Parser framing 已经失去可信度。
+     *
+     * 返回错误后必须关闭连接。
+     */
     if (
         result.status ==
         ParseStatus::Error
     )
     {
-        std::cerr
-            << "HTTP parse error fd="
-            << connection.fd
-            << ": "
-            << result.error
-            << '\n';
+        const int statusCode =
+            result.errorStatusCode;
+
+        const std::string reason =
+            reasonPhraseForStatus(
+                statusCode
+            );
+
+        Logger::warning(
+            "HTTP parse error fd="
+            + std::to_string(
+                connection.fd
+            )
+            + " status="
+            + std::to_string(
+                statusCode
+            )
+            + " reason=\""
+            + result.error
+            + "\""
+        );
 
         HttpResponse response =
             makeTextResponse(
-                400,
-                "Bad Request",
-                "400 Bad Request\n"
+                statusCode,
+                reason,
+                std::to_string(
+                    statusCode
+                )
+                    + " "
+                    + reason
+                    + "\n"
             );
 
-        response.headers[
-            "Connection"
-        ] = "close";
+        setHeader(
+            response,
+            "Connection",
+            "close"
+        );
 
         return appendResponse(
             epollFd,
@@ -730,12 +1027,7 @@ bool tryDispatchRequest(
     }
 
     /*
-     * Request 已经完整。
-     *
-     * 先从 readBuffer 移除。
-     *
-     * 后面可能已经存在下一个
-     * pipelined request，暂时保留。
+     * 已得到一个完整请求。
      */
     connection.readBuffer.erase(
         0,
@@ -778,6 +1070,10 @@ bool tryDispatchRequest(
                 completion.connectionId =
                     task.connectionId;
 
+                const auto start =
+                    std::chrono::
+                        steady_clock::now();
+
                 try
                 {
                     completion.response =
@@ -795,25 +1091,18 @@ bool tryDispatchRequest(
                         responseWantsClose(
                             completion.response
                         );
-
-                    if (
-                        completion.closeAfterWrite
-                    )
-                    {
-                        completion.response.headers[
-                            "Connection"
-                        ] = "close";
-                    }
                 }
                 catch (
                     const std::exception&
                     error
                 )
                 {
-                    std::cerr
-                        << "handler exception: "
-                        << error.what()
-                        << '\n';
+                    Logger::error(
+                        std::string(
+                            "handler exception: "
+                        )
+                        + error.what()
+                    );
 
                     completion.response =
                         makeTextResponse(
@@ -821,18 +1110,15 @@ bool tryDispatchRequest(
                             "Internal Server Error",
                             "500 Internal Server Error\n"
                         );
-
-                    completion.response.headers[
-                        "Connection"
-                    ] = "close";
 
                     completion.closeAfterWrite =
                         true;
                 }
                 catch (...)
                 {
-                    std::cerr
-                        << "unknown handler exception\n";
+                    Logger::error(
+                        "unknown handler exception"
+                    );
 
                     completion.response =
                         makeTextResponse(
@@ -841,13 +1127,42 @@ bool tryDispatchRequest(
                             "500 Internal Server Error\n"
                         );
 
-                    completion.response.headers[
-                        "Connection"
-                    ] = "close";
-
                     completion.closeAfterWrite =
                         true;
                 }
+
+                const auto end =
+                    std::chrono::
+                        steady_clock::now();
+
+                const auto duration =
+                    std::chrono::
+                        duration_cast<
+                            std::chrono::
+                                milliseconds
+                        >(
+                            end - start
+                        ).count();
+
+                /*
+                 * Access Log
+                 */
+                Logger::info(
+                    task.request.method
+                    + " "
+                    + task.request.target
+                    + " -> "
+                    + std::to_string(
+                        completion
+                            .response
+                            .statusCode
+                    )
+                    + " "
+                    + std::to_string(
+                        duration
+                    )
+                    + "ms"
+                );
 
                 completionQueue.push(
                     std::move(
@@ -868,12 +1183,17 @@ bool tryDispatchRequest(
 
     /*
      * ThreadPool queue 满。
-     *
-     * Request 已经从 readBuffer 消费，
-     * 因此直接在 Event Loop 构造 503。
      */
     connection.processing =
         false;
+
+    Logger::warning(
+        "thread pool overloaded, fd="
+        + std::to_string(
+            connection.fd
+        )
+        + ", returning 503"
+    );
 
     HttpResponse response =
         makeTextResponse(
@@ -882,9 +1202,11 @@ bool tryDispatchRequest(
             "503 Service Unavailable\n"
         );
 
-    response.headers[
-        "Connection"
-    ] = "close";
+    setHeader(
+        response,
+        "Connection",
+        "close"
+    );
 
     return appendResponse(
         epollFd,
@@ -893,6 +1215,12 @@ bool tryDispatchRequest(
         true
     );
 }
+
+/*
+ * --------------------------------------------------
+ * Worker completion
+ * --------------------------------------------------
+ */
 
 void handleCompletions(
     int epollFd,
@@ -925,8 +1253,7 @@ void handleCompletions(
             );
 
         /*
-         * 客户端在 Worker 执行期间
-         * 已经断开。
+         * Worker 执行期间客户端已经断开。
          */
         if (
             it ==
@@ -940,7 +1267,7 @@ void handleCompletions(
             it->second;
 
         /*
-         * 防止 fd reuse。
+         * fd 已经被 Linux 复用。
          */
         if (
             connection.id !=
@@ -953,14 +1280,67 @@ void handleCompletions(
         connection.processing =
             false;
 
-        /*
-         * 对端已经关闭发送方向，
-         * 当前 Response 发完以后关闭。
-         */
-        const bool closeAfterWrite =
+        ++connection.requestCount;
+
+        bool closeAfterWrite =
             completion.closeAfterWrite
             ||
             connection.peerClosed;
+
+        /*
+         * 每个 TCP connection 最多处理
+         * MaxRequestsPerConnection 个请求。
+         */
+        if (
+            connection.requestCount
+            >=
+            MaxRequestsPerConnection
+        )
+        {
+            closeAfterWrite =
+                true;
+        }
+
+        if (closeAfterWrite)
+        {
+            setHeader(
+                completion.response,
+                "Connection",
+                "close"
+            );
+
+            eraseHeader(
+                completion.response,
+                "Keep-Alive"
+            );
+        }
+        else
+        {
+            /*
+             * HTTP/1.1 本来就默认 keep-alive。
+             *
+             * 这里显式输出，方便学习和调试。
+             * 对 HTTP/1.0 也能明确保持连接。
+             */
+            setHeader(
+                completion.response,
+                "Connection",
+                "keep-alive"
+            );
+
+            const std::size_t remaining =
+                MaxRequestsPerConnection
+                - connection.requestCount;
+
+            setHeader(
+                completion.response,
+                "Keep-Alive",
+                "timeout=60, max="
+                    + std::to_string(
+                        remaining
+                    )
+            );
+        }
 
         if (
             !appendResponse(
@@ -981,13 +1361,10 @@ void handleCompletions(
         }
 
         /*
-         * 如果这个 Response 不要求关闭，
-         * readBuffer 中可能已经存在：
+         * readBuffer 中可能已经存在下一个
+         * HTTP Request。
          *
-         * Request B
-         *
-         * 因此不用等新的 EPOLLIN，
-         * 主动再次尝试 parse。
+         * 不需要等待新的 EPOLLIN。
          */
         if (
             !connection.closeAfterWrite
@@ -1016,10 +1393,76 @@ void handleCompletions(
     }
 }
 
+/*
+ * --------------------------------------------------
+ * Keep-Alive Idle Timeout
+ * --------------------------------------------------
+ */
+
+void closeIdleConnections(
+    int epollFd,
+    std::unordered_map<
+        int,
+        Connection
+    >& connections
+)
+{
+    const auto now =
+        std::chrono::
+            steady_clock::now();
+
+    std::vector<int> expired;
+
+    for (
+        const auto& [fd, connection] :
+        connections
+    )
+    {
+        /*
+         * Worker 正在处理请求时，
+         * 暂不做 idle timeout。
+         */
+        if (connection.processing)
+        {
+            continue;
+        }
+
+        if (
+            now
+            - connection.lastActivity
+            >
+            IdleTimeout
+        )
+        {
+            expired.push_back(fd);
+        }
+    }
+
+    for (int fd : expired)
+    {
+        Logger::info(
+            "idle timeout fd="
+            + std::to_string(fd)
+        );
+
+        disconnectConnection(
+            epollFd,
+            connections,
+            fd
+        );
+    }
+}
+
 }
 
 int main()
 {
+    /*
+     * ------------------------------------------------
+     * socket
+     * ------------------------------------------------
+     */
+
     const int serverFd =
         socket(
             AF_INET,
@@ -1029,10 +1472,12 @@ int main()
 
     if (serverFd == -1)
     {
-        std::cerr
-            << "socket failed: "
-            << std::strerror(errno)
-            << '\n';
+        Logger::error(
+            std::string(
+                "socket failed: "
+            )
+            + std::strerror(errno)
+        );
 
         return 1;
     }
@@ -1049,10 +1494,12 @@ int main()
         ) == -1
     )
     {
-        std::cerr
-            << "setsockopt failed: "
-            << std::strerror(errno)
-            << '\n';
+        Logger::error(
+            std::string(
+                "setsockopt failed: "
+            )
+            + std::strerror(errno)
+        );
 
         close(serverFd);
 
@@ -1080,10 +1527,12 @@ int main()
         ) == -1
     )
     {
-        std::cerr
-            << "bind failed: "
-            << std::strerror(errno)
-            << '\n';
+        Logger::error(
+            std::string(
+                "bind failed: "
+            )
+            + std::strerror(errno)
+        );
 
         close(serverFd);
 
@@ -1097,10 +1546,12 @@ int main()
         ) == -1
     )
     {
-        std::cerr
-            << "listen failed: "
-            << std::strerror(errno)
-            << '\n';
+        Logger::error(
+            std::string(
+                "listen failed: "
+            )
+            + std::strerror(errno)
+        );
 
         close(serverFd);
 
@@ -1113,14 +1564,20 @@ int main()
         )
     )
     {
-        std::cerr
-            << "failed to set "
-            << "serverFd non-blocking\n";
+        Logger::error(
+            "failed to set serverFd non-blocking"
+        );
 
         close(serverFd);
 
         return 1;
     }
+
+    /*
+     * ------------------------------------------------
+     * epoll
+     * ------------------------------------------------
+     */
 
     const int epollFd =
         epoll_create1(
@@ -1129,10 +1586,12 @@ int main()
 
     if (epollFd == -1)
     {
-        std::cerr
-            << "epoll_create1 failed: "
-            << std::strerror(errno)
-            << '\n';
+        Logger::error(
+            std::string(
+                "epoll_create1 failed: "
+            )
+            + std::strerror(errno)
+        );
 
         close(serverFd);
 
@@ -1140,7 +1599,7 @@ int main()
     }
 
     /*
-     * Worker → Event Loop 通知 fd。
+     * Worker → Event Loop
      */
     const int wakeFd =
         eventfd(
@@ -1152,10 +1611,12 @@ int main()
 
     if (wakeFd == -1)
     {
-        std::cerr
-            << "eventfd failed: "
-            << std::strerror(errno)
-            << '\n';
+        Logger::error(
+            std::string(
+                "eventfd failed: "
+            )
+            + std::strerror(errno)
+        );
 
         close(epollFd);
         close(serverFd);
@@ -1180,8 +1641,9 @@ int main()
         ) == -1
     )
     {
-        std::cerr
-            << "failed to register serverFd\n";
+        Logger::error(
+            "failed to register serverFd"
+        );
 
         close(wakeFd);
         close(epollFd);
@@ -1207,8 +1669,9 @@ int main()
         ) == -1
     )
     {
-        std::cerr
-            << "failed to register wakeFd\n";
+        Logger::error(
+            "failed to register wakeFd"
+        );
 
         close(wakeFd);
         close(epollFd);
@@ -1218,10 +1681,11 @@ int main()
     }
 
     /*
-     * HTTP components。
-     *
-     * Parser 只在 event-loop thread 使用。
+     * ------------------------------------------------
+     * HTTP Components
+     * ------------------------------------------------
      */
+
     HttpRequestParser parser;
 
     Router router;
@@ -1245,9 +1709,8 @@ int main()
     );
 
     /*
-     * Router 注册完成后不再修改。
-     *
-     * Worker threads 只进行并发 const read。
+     * 注册完成以后 Router 不再修改。
+     * Worker 只做并发只读。
      */
     StaticFileHandler staticFiles(
         "www"
@@ -1262,22 +1725,29 @@ int main()
             std::thread::
                 hardware_concurrency();
 
-    const std::size_t
-        workerCount =
-            std::max(
-                1u,
-                hardwareThreads
-            );
+    const std::size_t workerCount =
+        std::max(
+            1u,
+            hardwareThreads
+        );
 
     ThreadPool threadPool(
         workerCount,
         MaxPendingTasks
     );
 
-    std::cout
-        << "Worker threads: "
-        << workerCount
-        << '\n';
+    Logger::info(
+        "worker threads="
+        + std::to_string(
+            workerCount
+        )
+    );
+
+    /*
+     * ------------------------------------------------
+     * Connections
+     * ------------------------------------------------
+     */
 
     std::unordered_map<
         int,
@@ -1293,20 +1763,24 @@ int main()
     epoll_event
         events[MaxEvents];
 
-    std::cout
-        << "HTTP server listening on "
-        << "0.0.0.0:8080\n";
+    Logger::info(
+        "HTTP server listening on 0.0.0.0:8080"
+    );
 
-    bool running = true;
-
-    while (running)
+    while (true)
     {
+        /*
+         * 不再无限等待。
+         *
+         * 至少每 1 秒醒来一次，
+         * 用于检查 idle timeout。
+         */
         const int eventCount =
             epoll_wait(
                 epollFd,
                 events,
                 MaxEvents,
-                -1
+                EpollWaitTimeoutMs
             );
 
         if (eventCount == -1)
@@ -1316,10 +1790,12 @@ int main()
                 continue;
             }
 
-            std::cerr
-                << "epoll_wait failed: "
-                << std::strerror(errno)
-                << '\n';
+            Logger::error(
+                std::string(
+                    "epoll_wait failed: "
+                )
+                + std::strerror(errno)
+            );
 
             break;
         }
@@ -1333,13 +1809,15 @@ int main()
             const int fd =
                 events[index].data.fd;
 
-            const std::uint32_t
-                eventMask =
-                    events[index].events;
+            const std::uint32_t eventMask =
+                events[index].events;
 
             /*
-             * 新连接。
+             * ----------------------------------------
+             * accept
+             * ----------------------------------------
              */
+
             if (fd == serverFd)
             {
                 while (true)
@@ -1373,17 +1851,25 @@ int main()
                         )
                         {
                             close(clientFd);
+
                             continue;
                         }
 
-                        Connection
-                            connection;
+                        Connection connection;
 
                         connection.fd =
                             clientFd;
 
                         connection.id =
                             nextConnectionId++;
+
+                        connection.lastActivity =
+                            std::chrono::
+                                steady_clock::now();
+
+                        const std::uint64_t
+                            newConnectionId =
+                                connection.id;
 
                         connections.emplace(
                             clientFd,
@@ -1421,14 +1907,16 @@ int main()
                             continue;
                         }
 
-                        std::cout
-                            << "Connected fd="
-                            << clientFd
-                            << " connectionId="
-                            << connections[
+                        Logger::info(
+                            "client connected fd="
+                            + std::to_string(
                                 clientFd
-                            ].id
-                            << '\n';
+                            )
+                            + " connectionId="
+                            + std::to_string(
+                                newConnectionId
+                            )
+                        );
 
                         continue;
                     }
@@ -1447,10 +1935,14 @@ int main()
                         break;
                     }
 
-                    std::cerr
-                        << "accept failed: "
-                        << std::strerror(errno)
-                        << '\n';
+                    Logger::error(
+                        std::string(
+                            "accept failed: "
+                        )
+                        + std::strerror(
+                            errno
+                        )
+                    );
 
                     break;
                 }
@@ -1459,8 +1951,11 @@ int main()
             }
 
             /*
-             * Worker 完成。
+             * ----------------------------------------
+             * Worker completion event
+             * ----------------------------------------
              */
+
             if (fd == wakeFd)
             {
                 drainWakeFd(
@@ -1493,8 +1988,7 @@ int main()
             }
 
             /*
-             * EPOLLERR / EPOLLHUP
-             * 直接视为 fatal。
+             * Fatal socket state。
              */
             if (
                 eventMask
@@ -1516,10 +2010,11 @@ int main()
             }
 
             /*
-             * EPOLLIN / RDHUP：
-             *
-             * 先尽量读取所有剩余字节。
+             * ----------------------------------------
+             * Read
+             * ----------------------------------------
              */
+
             if (
                 eventMask
                 &
@@ -1569,10 +2064,9 @@ int main()
                 }
 
                 /*
-                 * processing==true 时
-                 * tryDispatchRequest 会直接返回。
-                 *
-                 * 但数据仍然可以继续进入 readBuffer。
+                 * processing == true：
+                 * 不会提交第二个 Request，
+                 * 但 recv 数据仍然允许积存在 readBuffer。
                  */
                 if (
                     !tryDispatchRequest(
@@ -1597,18 +2091,46 @@ int main()
                 }
 
                 /*
-                 * Peer 已经彻底关闭，
-                 * 而且没有任何正在处理/待发送内容，
-                 * 就没有继续保留连接的理由。
+                 * peer 已关闭发送方向后，
+                 * 不再继续关注 EPOLLIN/RDHUP。
+                 */
+                if (
+                    connections.find(fd)
+                    != connections.end()
+                )
+                {
+                    if (
+                        !updateConnectionEvents(
+                            epollFd,
+                            connection
+                        )
+                    )
+                    {
+                        disconnectConnection(
+                            epollFd,
+                            connections,
+                            fd
+                        );
+
+                        continue;
+                    }
+                }
+
+                /*
+                 * 对端不会再发送任何数据，
+                 * 又没有请求正在处理，
+                 * 也没有 Response 等待发送：
+                 *
+                 * 直接清理。
                  */
                 if (
                     connection.peerClosed
                     &&
                     !connection.processing
                     &&
-                    connection.writeBuffer.empty()
-                    &&
-                    connection.readBuffer.empty()
+                    connection
+                        .writeBuffer
+                        .empty()
                 )
                 {
                     disconnectConnection(
@@ -1622,8 +2144,7 @@ int main()
             }
 
             /*
-             * 上面可能 disconnect。
-             * 因此重新 find。
+             * 上面可能已经 erase。
              */
             it =
                 connections.find(fd);
@@ -1635,6 +2156,12 @@ int main()
             {
                 continue;
             }
+
+            /*
+             * ----------------------------------------
+             * Write
+             * ----------------------------------------
+             */
 
             if (
                 eventMask
@@ -1659,15 +2186,22 @@ int main()
                 }
             }
         }
+
+        /*
+         * 每次 event-loop iteration
+         * 完成后检查 Keep-Alive idle timeout。
+         */
+        closeIdleConnections(
+            epollFd,
+            connections
+        );
     }
 
     /*
-     * 非常重要：
+     * 先停 Worker。
      *
-     * 先停 ThreadPool。
-     *
-     * 防止还有 Worker 在使用 wakeFd，
-     * 我们却提前 close(wakeFd)。
+     * 否则还有 Worker 可能 write(wakeFd)，
+     * 但我们已经把 wakeFd close。
      */
     threadPool.shutdown();
 

@@ -1,10 +1,13 @@
 #include "static_file_handler.h"
 
+#include <filesystem>
 #include <fstream>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <utility>
 
 namespace
 {
@@ -13,6 +16,18 @@ std::optional<std::string> readFile(
     const std::filesystem::path& path
 )
 {
+    std::error_code error;
+
+    if (
+        !std::filesystem::is_regular_file(
+            path,
+            error
+        )
+    )
+    {
+        return std::nullopt;
+    }
+
     std::ifstream file(
         path,
         std::ios::binary
@@ -86,6 +101,11 @@ std::string contentType(
         return "image/svg+xml";
     }
 
+    if (extension == ".ico")
+    {
+        return "image/x-icon";
+    }
+
     return
         "application/octet-stream";
 }
@@ -103,6 +123,12 @@ bool isSafeTarget(
         return false;
     }
 
+    /*
+     * 学习版 path traversal 防御。
+     *
+     * 后续生产级版本还应：
+     * URL decode + canonical path + symlink policy。
+     */
     if (
         target.find("..")
         !=
@@ -125,28 +151,25 @@ bool isSafeTarget(
 }
 
 HttpResponse textResponse(
-    int status,
-    std::string reason,
+    int statusCode,
+    std::string reasonPhrase,
     std::string body
 )
 {
     HttpResponse response;
 
     response.statusCode =
-        status;
+        statusCode;
 
     response.reasonPhrase =
-        std::move(reason);
+        std::move(
+            reasonPhrase
+        );
 
     response.headers[
         "Content-Type"
     ] =
         "text/plain; charset=utf-8";
-
-    response.headers[
-        "Connection"
-    ] =
-        "close";
 
     response.body =
         std::move(body);
@@ -160,7 +183,9 @@ StaticFileHandler::StaticFileHandler(
     std::filesystem::path documentRoot
 )
     : documentRoot_(
-        std::move(documentRoot)
+        std::move(
+            documentRoot
+        )
     )
 {
 }
@@ -169,7 +194,9 @@ HttpResponse StaticFileHandler::handle(
     const HttpRequest& request
 ) const
 {
-    if (request.method != "GET")
+    if (
+        request.method != "GET"
+    )
     {
         HttpResponse response =
             textResponse(
@@ -202,8 +229,7 @@ HttpResponse StaticFileHandler::handle(
         request.target;
 
     /*
-     * D3 暂时不解析 query string。
-     * 先避免把 ? 后内容当文件名。
+     * Query string 不是文件路径的一部分。
      */
     const std::size_t query =
         target.find('?');
@@ -222,10 +248,6 @@ HttpResponse StaticFileHandler::handle(
             "/index.html";
     }
 
-    /*
-     * target 以 '/' 开头，
-     * relative_path() 去掉根路径含义。
-     */
     const std::filesystem::path relative =
         std::filesystem::path(
             target
@@ -236,7 +258,9 @@ HttpResponse StaticFileHandler::handle(
         / relative;
 
     auto contents =
-        readFile(filePath);
+        readFile(
+            filePath
+        );
 
     if (!contents)
     {
@@ -262,13 +286,10 @@ HttpResponse StaticFileHandler::handle(
             filePath
         );
 
-    response.headers[
-        "Connection"
-    ] =
-        "close";
-
     response.body =
-        std::move(*contents);
+        std::move(
+            *contents
+        );
 
     return response;
 }

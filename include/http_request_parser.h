@@ -1,5 +1,5 @@
-#ifndef HTTP_REQUEST_PARSE_H
-#define HTTP_REQUEST_PARSE_H
+#ifndef HTTP_REQUEST_PARSER_H
+#define HTTP_REQUEST_PARSER_H
 
 #include "http_request.h"
 
@@ -16,11 +16,17 @@ enum class ParseStatus
 
 struct ParseResult
 {
-    ParseStatus status = ParseStatus::NeedMoreData;
+    ParseStatus status =
+        ParseStatus::NeedMoreData;
 
     HttpRequest request;
 
     std::size_t consumed = 0;
+
+    /*
+     * Parser 出错时建议返回的 HTTP 状态码。
+     */
+    int errorStatusCode = 400;
 
     std::string error;
 };
@@ -29,9 +35,8 @@ class HttpRequestParser
 {
 public:
     ParseResult parse(
-        std::string_view data
+        std::string_view buffer
     ) const;
 };
 
-
-#endif // HTTP_REQUEST_PARSE_H
+#endif

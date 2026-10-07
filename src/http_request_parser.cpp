@@ -2,6 +2,7 @@
 
 #include <charconv>
 #include <cctype>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -9,226 +10,248 @@
 namespace
 {
 
-    constexpr std::size_t MaxHeaderSize =
-        16 * 1024;
+constexpr std::size_t MaxHeaderSize =
+    16 * 1024;
 
-    constexpr std::size_t MaxBodySize =
-        1024 * 1024;
+constexpr std::size_t MaxBodySize =
+    1024 * 1024;
 
+void setError(
+    ParseResult& result,
+    int statusCode,
+    std::string message
+)
+{
+    result.status =
+        ParseStatus::Error;
 
-    // 找出非空白字符的首尾位置，并返回去掉首尾空白字符的字符串。    
-    std::string trim(
-        std::string_view value
+    result.errorStatusCode =
+        statusCode;
+
+    result.error =
+        std::move(message);
+}
+
+std::string trim(
+    std::string_view value
+)
+{
+    std::size_t begin = 0;
+
+    while (
+        begin < value.size()
+        &&
+        std::isspace(
+            static_cast<unsigned char>(
+                value[begin]
+            )
+        )
     )
     {
-        std::size_t begin = 0;
+        ++begin;
+    }
 
-        while (
-            begin < value.size()
-            &&
-            std::isspace(
-                static_cast<unsigned char>(
-                    value[begin]
-                )
+    std::size_t end =
+        value.size();
+
+    while (
+        end > begin
+        &&
+        std::isspace(
+            static_cast<unsigned char>(
+                value[end - 1]
             )
         )
-        {
-            ++begin;
-        }
+    )
+    {
+        --end;
+    }
 
-        std::size_t end =
-            value.size();
-
-        while (
-            end > begin
-            &&
-            std::isspace(
-                static_cast<unsigned char>(
-                    value[end - 1]
-                )
-            )
+    return std::string(
+        value.substr(
+            begin,
+            end - begin
         )
-        {
-            --end;
-        }
+    );
+}
 
-        return std::string(
-            value.substr(
-                begin,
-                end - begin
+std::string toLower(
+    std::string_view text
+)
+{
+    std::string result;
+
+    result.reserve(
+        text.size()
+    );
+
+    for (char ch : text)
+    {
+        result.push_back(
+            static_cast<char>(
+                std::tolower(
+                    static_cast<unsigned char>(
+                        ch
+                    )
+                )
             )
         );
     }
 
-    // 将字符串转换为小写。
-    std::string toLower(
-        std::string_view text
+    return result;
+}
+
+bool parseRequestLine(
+    std::string_view line,
+    HttpRequest& request
+)
+{
+    std::istringstream stream{
+        std::string(line)
+    };
+
+    if (
+        !(stream
+          >> request.method
+          >> request.target
+          >> request.version)
     )
     {
-        std::string result;
-
-        result.reserve(
-            text.size()
-        );
-
-        for (char ch : text)
-        {
-            result.push_back(
-                static_cast<char>(
-                    std::tolower(
-                        static_cast<unsigned char>(
-                            ch
-                        )
-                    )
-                )
-            );
-        }
-
-        return result;
+        return false;
     }
 
-    // 解析请求行，返回是否成功。
-    bool parseRequestLine(
-        std::string_view line,
-        HttpRequest& request
-    )
+    /*
+     * 不允许：
+     *
+     * GET / HTTP/1.1 garbage
+     */
+    std::string extra;
+
+    if (stream >> extra)
     {
-        std::istringstream stream{
-            std::string(line)
-        };
-
-        if (
-            !(stream
-            >> request.method
-            >> request.target
-            >> request.version)
-        )
-        {
-            return false;
-        }
-
-        std::string extra;
-
-        if (stream >> extra)
-        {
-            return false;
-        }
-
-        if (
-            request.method.empty()
-            ||
-            request.target.empty()
-        )
-        {
-            return false;
-        }
-
-        if (
-            request.version != "HTTP/1.1"
-            &&
-            request.version != "HTTP/1.0"
-        )
-        {
-            return false;
-        }
-
-        return true;
+        return false;
     }
 
-
-    // 解析 Header 行，返回是否成功。
-    bool parseHeaderLine(
-        std::string_view line,
-        HttpRequest& request
+    if (
+        request.method.empty()
+        ||
+        request.target.empty()
     )
     {
-        const std::size_t colon =
-            line.find(':');
+        return false;
+    }
 
-        if (
-            colon ==
-                std::string_view::npos
-            ||
-            colon == 0
-        )
-        {
-            return false;
-        }
+    if (
+        request.version != "HTTP/1.1"
+        &&
+        request.version != "HTTP/1.0"
+    )
+    {
+        return false;
+    }
 
-        std::string name =
-            toLower(
-                trim(
-                    line.substr(
-                        0,
-                        colon
-                    )
-                )
-            );
+    return true;
+}
 
-        std::string value =
+bool parseHeaderLine(
+    std::string_view line,
+    HttpRequest& request
+)
+{
+    const std::size_t colon =
+        line.find(':');
+
+    if (
+        colon ==
+            std::string_view::npos
+        ||
+        colon == 0
+    )
+    {
+        return false;
+    }
+
+    std::string name =
+        toLower(
             trim(
                 line.substr(
-                    colon + 1
+                    0,
+                    colon
                 )
-            );
-
-        if (name.empty())
-        {
-            return false;
-        }
-
-        if (
-            request.headers.find(name)
-            != request.headers.end()
-        )
-        {
-            return false;
-        }
-        // 简化策略：根据HTTP/1.1 规范要求同名 Header 不允许重复。
-        request.headers.emplace(
-            std::move(name),
-            std::move(value)
+            )
         );
 
-        return true;
+    std::string value =
+        trim(
+            line.substr(
+                colon + 1
+            )
+        );
+
+    if (name.empty())
+    {
+        return false;
     }
 
-    // 解析 Content-Length，返回是否成功。
-    bool parseContentLength(
-        std::string_view text,
-        std::size_t& result
+    /*
+     * 学习版采取保守策略：
+     * 暂时拒绝重复 Header。
+     *
+     * 完整 HTTP 实现中，不同 Header
+     * 对重复值有不同规则。
+     */
+    if (
+        request.headers.find(name)
+        != request.headers.end()
     )
     {
-        if (text.empty())
-        {
-            return false;
-        }
-
-        std::size_t value = 0;
-
-        const auto [ptr, error] =
-            std::from_chars(
-                text.data(),
-                text.data()
-                    + text.size(),
-                value
-            );
-
-        if (
-            error != std::errc{}
-            ||
-            ptr !=
-                text.data()
-                    + text.size()
-        )
-        {
-            return false;
-        }
-
-        result = value;
-
-        return true;
+        return false;
     }
+
+    request.headers.emplace(
+        std::move(name),
+        std::move(value)
+    );
+
+    return true;
+}
+
+bool parseContentLength(
+    std::string_view text,
+    std::size_t& result
+)
+{
+    if (text.empty())
+    {
+        return false;
+    }
+
+    std::size_t value = 0;
+
+    const auto [ptr, error] =
+        std::from_chars(
+            text.data(),
+            text.data()
+                + text.size(),
+            value
+        );
+
+    if (
+        error != std::errc{}
+        ||
+        ptr !=
+            text.data()
+                + text.size()
+    )
+    {
+        return false;
+    }
+
+    result = value;
+
+    return true;
+}
+
 }
 
 ParseResult HttpRequestParser::parse(
@@ -238,9 +261,11 @@ ParseResult HttpRequestParser::parse(
     ParseResult result;
 
     /*
-     * 第一步：
-     * 等待完整 Header，判断是否超出最大Header值。
+     * ------------------------------------------------
+     * 1. 等 Header 完整
+     * ------------------------------------------------
      */
+
     const std::size_t headerEnd =
         buffer.find(
             "\r\n\r\n"
@@ -256,12 +281,31 @@ ParseResult HttpRequestParser::parse(
             > MaxHeaderSize
         )
         {
-            result.status =
-                ParseStatus::Error;
-
-            result.error =
-                "HTTP header too large";
+            setError(
+                result,
+                431,
+                "HTTP header too large"
+            );
         }
+
+        return result;
+    }
+
+    /*
+     * +4 对应：
+     *
+     * \r\n\r\n
+     */
+    if (
+        headerEnd >
+        MaxHeaderSize - 4
+    )
+    {
+        setError(
+            result,
+            431,
+            "HTTP header too large"
+        );
 
         return result;
     }
@@ -269,24 +313,12 @@ ParseResult HttpRequestParser::parse(
     const std::size_t headerBytes =
         headerEnd + 4;
 
-    if (
-        headerBytes >
-        MaxHeaderSize
-    )
-    {
-        result.status =
-            ParseStatus::Error;
-
-        result.error =
-            "HTTP header too large";
-
-        return result;
-    }
-
     /*
-     * 第二步：
-     * Request Line。
+     * ------------------------------------------------
+     * 2. Request Line
+     * ------------------------------------------------
      */
+
     const std::size_t requestLineEnd =
         buffer.find("\r\n");
 
@@ -298,20 +330,21 @@ ParseResult HttpRequestParser::parse(
             headerEnd
     )
     {
-        result.status =
-            ParseStatus::Error;
-
-        result.error =
-            "invalid request line";
+        setError(
+            result,
+            400,
+            "invalid request line"
+        );
 
         return result;
     }
 
-    const std::string_view requestLine =
-        buffer.substr(
-            0,
-            requestLineEnd
-        );
+    const std::string_view
+        requestLine =
+            buffer.substr(
+                0,
+                requestLineEnd
+            );
 
     if (
         !parseRequestLine(
@@ -320,19 +353,21 @@ ParseResult HttpRequestParser::parse(
         )
     )
     {
-        result.status =
-            ParseStatus::Error;
-
-        result.error =
-            "invalid request line";
+        setError(
+            result,
+            400,
+            "invalid request line"
+        );
 
         return result;
     }
 
     /*
-     * 第三步：
-     * Headers。
+     * ------------------------------------------------
+     * 3. Headers
+     * ------------------------------------------------
      */
+
     std::size_t position =
         requestLineEnd + 2;
 
@@ -352,11 +387,11 @@ ParseResult HttpRequestParser::parse(
                 headerEnd
         )
         {
-            result.status =
-                ParseStatus::Error;
-
-            result.error =
-                "invalid header";
+            setError(
+                result,
+                400,
+                "invalid header"
+            );
 
             return result;
         }
@@ -369,11 +404,11 @@ ParseResult HttpRequestParser::parse(
 
         if (line.empty())
         {
-            result.status =
-                ParseStatus::Error;
-
-            result.error =
-                "unexpected empty header";
+            setError(
+                result,
+                400,
+                "unexpected empty header"
+            );
 
             return result;
         }
@@ -385,11 +420,11 @@ ParseResult HttpRequestParser::parse(
             )
         )
         {
-            result.status =
-                ParseStatus::Error;
-
-            result.error =
-                "invalid or duplicate header";
+            setError(
+                result,
+                400,
+                "invalid or duplicate header"
+            );
 
             return result;
         }
@@ -399,8 +434,7 @@ ParseResult HttpRequestParser::parse(
     }
 
     /*
-     * HTTP/1.1 学习版：
-     * 要求 Host。
+     * HTTP/1.1 要求 Host。
      */
     if (
         result.request.version ==
@@ -413,18 +447,21 @@ ParseResult HttpRequestParser::parse(
         result.request.headers.end()
     )
     {
-        result.status =
-            ParseStatus::Error;
-
-        result.error =
-            "missing Host header";
+        setError(
+            result,
+            400,
+            "missing Host header"
+        );
 
         return result;
     }
 
     /*
-     * 这个 Parser 暂不支持
-     * Transfer-Encoding。
+     * D6 版本仍然暂不实现：
+     *
+     * Transfer-Encoding: chunked
+     *
+     * 为避免 framing 歧义，直接拒绝。
      */
     if (
         result.request.headers.find(
@@ -434,19 +471,21 @@ ParseResult HttpRequestParser::parse(
         result.request.headers.end()
     )
     {
-        result.status =
-            ParseStatus::Error;
-
-        result.error =
-            "Transfer-Encoding is not supported";
+        setError(
+            result,
+            400,
+            "Transfer-Encoding is not supported"
+        );
 
         return result;
     }
 
     /*
-     * 第四步：
-     * Content-Length。
+     * ------------------------------------------------
+     * 4. Content-Length
+     * ------------------------------------------------
      */
+
     std::size_t contentLength = 0;
 
     const auto contentLengthIt =
@@ -466,11 +505,11 @@ ParseResult HttpRequestParser::parse(
             )
         )
         {
-            result.status =
-                ParseStatus::Error;
-
-            result.error =
-                "invalid Content-Length";
+            setError(
+                result,
+                400,
+                "invalid Content-Length"
+            );
 
             return result;
         }
@@ -480,11 +519,11 @@ ParseResult HttpRequestParser::parse(
             MaxBodySize
         )
         {
-            result.status =
-                ParseStatus::Error;
-
-            result.error =
-                "HTTP body too large";
+            setError(
+                result,
+                413,
+                "HTTP body too large"
+            );
 
             return result;
         }
@@ -495,15 +534,17 @@ ParseResult HttpRequestParser::parse(
      */
     if (
         contentLength >
-        static_cast<std::size_t>(-1)
+        std::numeric_limits<
+            std::size_t
+        >::max()
             - headerBytes
     )
     {
-        result.status =
-            ParseStatus::Error;
-
-        result.error =
-            "invalid message size";
+        setError(
+            result,
+            400,
+            "invalid HTTP message size"
+        );
 
         return result;
     }
@@ -513,24 +554,23 @@ ParseResult HttpRequestParser::parse(
         + contentLength;
 
     /*
-     * Header 已经完整，
-     * 但 Body 还没完整。
+     * Header 已完整，
+     * Body 尚未全部到达。
      */
     if (
-        buffer.size() <
-        totalBytes
+        buffer.size()
+        < totalBytes
     )
     {
-        result.status =
-            ParseStatus::NeedMoreData;
-
         return result;
     }
 
     /*
-     * 第五步：
-     * Body 完整。
+     * ------------------------------------------------
+     * 5. Body
+     * ------------------------------------------------
      */
+
     result.request.body =
         std::string(
             buffer.substr(

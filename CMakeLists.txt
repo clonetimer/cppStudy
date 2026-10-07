@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.18)
 
 project(
     CppHttpServer
-    VERSION 0.5.0
+    VERSION 0.6.0
     LANGUAGES CXX
 )
 
@@ -90,7 +90,7 @@ if (
 endif()
 
 # --------------------------------------------------
-# HTTP core
+# HTTP Core
 # --------------------------------------------------
 
 add_library(
@@ -102,6 +102,7 @@ add_library(
     src/router.cpp
     src/api_handlers.cpp
     src/thread_pool.cpp
+    src/logger.cpp
 )
 
 target_include_directories(
@@ -125,7 +126,7 @@ target_link_libraries(
 )
 
 # --------------------------------------------------
-# HTTP server
+# Server
 # --------------------------------------------------
 
 add_executable(
@@ -168,13 +169,6 @@ if (BUILD_TESTING)
         googletest
     )
 
-    # -----------------------------------
-    # 只有本地确实存在的测试文件才加入。
-    # 这样你 D2/D3/D4 测试文件还没全部建立时，
-    # CMake 也不会因此直接失败。
-    # ----------------------------
-
-
     set(
         HTTP_TEST_SOURCES
     )
@@ -191,11 +185,13 @@ if (BUILD_TESTING)
             EXISTS
             "${CMAKE_CURRENT_SOURCE_DIR}/${TEST_SOURCE}"
         )
+
             list(
                 APPEND
                 HTTP_TEST_SOURCES
                 ${TEST_SOURCE}
             )
+
         endif()
 
     endforeach()
