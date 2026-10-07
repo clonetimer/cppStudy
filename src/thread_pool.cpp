@@ -1,27 +1,71 @@
 #include "thread_pool.h"
-#include "logger.h"
+
+#include <stdexcept>
+#include <utility>
 
 ThreadPool::ThreadPool(
-    std::size_t workerCount
+    std::size_t threadCount,
+    std::size_t maxPendingTasks
 )
+    : maxPendingTasks_(
+        maxPendingTasks
+    )
 {
-    if (workerCount == 0)
+    if (threadCount == 0)
+    {
+        threadCount = 1;
+    }
+
+    if (maxPendingTasks_ == 0)
     {
         throw std::invalid_argument(
-            "workerCount must be greater than zero"
+            "maxPendingTasks must be greater than zero"
         );
     }
 
-    for (std::size_t i = 0;
-         i < workerCount;
-         ++i)
+    try
     {
-        workers_.emplace_back(
-            [this]()
-            {
-                workerLoop();
-            }
+        workers_.reserve(
+            threadCount
         );
+
+        for (
+            std::size_t i = 0;
+            i < threadCount;
+            ++i
+        )
+        {
+            workers_.emplace_back(
+                &ThreadPool::workerLoop,
+                this
+            );
+        }
+    }
+    catch (...)
+    {
+        {
+            std::lock_guard<std::mutex>
+                lock(mutex_);
+
+            stopping_ = true;
+        }
+
+        condition_.notify_all();
+
+        for (
+            auto& worker :
+            workers_
+        )
+        {
+            if (
+                worker.joinable()
+            )
+            {
+                worker.join();
+            }
+        }
+
+        throw;
     }
 }
 
@@ -30,57 +74,82 @@ ThreadPool::~ThreadPool()
     shutdown();
 }
 
-void ThreadPool::shutdown()
+bool ThreadPool::submit(
+    Task task
+)
 {
-    Logger::log(
-        LogLevel::Info,
-        "shutdown requested");
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex>
+            lock(mutex_);
 
         if (stopping_)
         {
-            return;
+            return false;
         }
 
-        stopping_ = true;
+        if (
+            tasks_.size()
+            >= maxPendingTasks_
+        )
+        {
+            return false;
+        }
+
+        tasks_.push(
+            std::move(task)
+        );
+    }
+
+    condition_.notify_one();
+
+    return true;
+}
+
+void ThreadPool::shutdown()
+{
+    {
+        std::lock_guard<std::mutex>
+            lock(mutex_);
+
+        if (stopping_)
+        {
+            /*
+             * 仍然继续下面的 join。
+             */
+        }
+        else
+        {
+            stopping_ = true;
+        }
     }
 
     condition_.notify_all();
 
-    for (auto& worker : workers_)
+    for (
+        auto& worker :
+        workers_
+    )
     {
-        if (worker.joinable())
+        if (
+            worker.joinable()
+        )
         {
             worker.join();
         }
     }
-    Logger::log(
-        LogLevel::Info,
-        "all workers joined");
-}
 
-bool ThreadPool::isStopping() const
-{
-    std::lock_guard<std::mutex> lock(mutex_);
-
-    return stopping_;
+    workers_.clear();
 }
 
 void ThreadPool::workerLoop()
 {
-    Logger::log(
-        LogLevel::Debug,
-        "worker started");
-
     while (true)
     {
-        std::function<void()> task;
+        Task task;
 
         {
-            std::unique_lock<std::mutex> lock(
-                mutex_
-            );
+            std::unique_lock<std::mutex>
+                lock(mutex_);
 
             condition_.wait(
                 lock,
@@ -93,7 +162,8 @@ void ThreadPool::workerLoop()
 
             if (
                 stopping_
-                && tasks_.empty()
+                &&
+                tasks_.empty()
             )
             {
                 return;
@@ -107,6 +177,22 @@ void ThreadPool::workerLoop()
             tasks_.pop();
         }
 
-        task();
+        /*
+         * 即使某个 task 忘了自己 catch，
+         * 也不要让整个 worker thread 消失。
+         */
+        try
+        {
+            task();
+        }
+        catch (...)
+        {
+            /*
+             * HTTP worker 自己还会负责
+             * 将业务异常转换成 500。
+             *
+             * 这里属于最终保护层。
+             */
+        }
     }
 }

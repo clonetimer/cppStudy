@@ -4,21 +4,20 @@
 #include <condition_variable>
 #include <cstddef>
 #include <functional>
-#include <future>
-#include <memory>
 #include <mutex>
 #include <queue>
-#include <stdexcept>
 #include <thread>
-#include <type_traits>
-#include <utility>
 #include <vector>
 
 class ThreadPool
 {
 public:
+    using Task =
+        std::function<void()>;
+
     explicit ThreadPool(
-        std::size_t workerCount
+        std::size_t threadCount,
+        std::size_t maxPendingTasks = 1024
     );
 
     ~ThreadPool();
@@ -31,79 +30,38 @@ public:
         const ThreadPool&
     ) = delete;
 
-    template <
-        typename F,
-        typename... Args
-    >
-    auto submit(
-        F&& function,
-        Args&&... args
-    )
-        -> std::future<
-            std::invoke_result_t<
-                F,
-                Args...
-            >
-        >
-        {
-            using ReturnType =
-                std::invoke_result_t<
-                    F,
-                    Args...
-                >;
+    /*
+     * 成功加入队列：
+     * true
+     *
+     * queue 满 / pool stopping：
+     * false
+     */
+    bool submit(Task task);
 
-            auto task =
-                std::make_shared<
-                    std::packaged_task<
-                        ReturnType()
-                    >
-                >(
-                    std::bind(
-                        std::forward<F>(function),
-                        std::forward<Args>(args)...
-                    )
-                );
-
-            {
-                std::lock_guard<std::mutex> lock(mutex_);
-
-                if (stopping_)
-                {
-                    throw std::runtime_error(
-                        "cannot submit task to stopping thread pool"
-                    );
-                }
-
-                tasks_.emplace(
-                    [task]()
-                    {
-                        (*task)();
-                    }
-                );
-            }
-
-            condition_.notify_one();
-
-            return task->get_future();
-        };
-
+    /*
+     * 停止接收新任务，
+     * 等待现有任务完成，
+     * join 所有 Worker。
+     */
     void shutdown();
-
-    bool isStopping() const;
 
 private:
     void workerLoop();
 
-private:
-    std::vector<std::thread> workers_;
+    std::vector<std::thread>
+        workers_;
 
-    std::queue<
-        std::function<void()>
-    > tasks_;
+    std::queue<Task>
+        tasks_;
 
-    mutable std::mutex mutex_;
+    std::mutex mutex_;
 
-    std::condition_variable condition_;
+    std::condition_variable
+        condition_;
+
+    std::size_t
+        maxPendingTasks_;
 
     bool stopping_ = false;
 };
