@@ -12,7 +12,7 @@ enum class ParseStatus
     NeedMoreData,
     Complete,
     Error
-}
+};
 
 struct ParseResult
 {
@@ -25,7 +25,7 @@ struct ParseResult
     std::string error;
 };
 
-class HttpRequestParse
+class HttpRequestParser
 {
 public:
     ParseResult parse(

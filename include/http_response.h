@@ -20,3 +20,10 @@ struct HttpResponse
 
     std::string body;
 };
+
+std::string serializeResponse
+(
+    const HttpResponse& response
+);
+
+#endif
